@@ -1,0 +1,3 @@
+PySide6
+python-mpv
+pyinstaller
