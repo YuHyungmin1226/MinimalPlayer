@@ -4,8 +4,8 @@
 
 ## 📥 다운로드 (Download)
 
-설치 없이 바로 사용 가능한 실행 파일은 아래 링크에서 받으실 수 있습니다:
-👉 **[최신 버전 다운로드 (Releases)](https://github.com/YuHyungmin1226/MinimalPlayer/releases)**
+설치 없이 바로 사용 가능한 실행 파일은 본 저장소의 **Release 폴더**에서 받으실 수 있습니다:
+👉 **[최신 버전 다운로드 (MinimalPlayer.exe)](./Release/MinimalPlayer.exe)**
 
 - `MinimalPlayer.exe`: 파이썬 설치 없이 단독 실행 가능한 파일입니다. (최초 실행 시 `mpv-1.dll`을 자동으로 다운로드합니다.)
 
@@ -37,7 +37,7 @@
 ## 🚀 시작하기 (How to Use)
 
 ### 1. 실행 파일(.exe)로 사용하기
-1. [Releases](https://github.com/YuHyungmin1226/MinimalPlayer/releases)에서 `MinimalPlayer.exe`를 다운로드합니다.
+1. 본 저장소의 **[Release](./Release)** 폴더에서 `MinimalPlayer.exe`를 다운로드합니다.
 2. 실행하면 최초 1회에 한하여 `mpv-1.dll` 엔진이 자동으로 다운로드됩니다.
 3. 영상을 창 위로 끌어다 놓으면 즉시 감상할 수 있습니다.
 
