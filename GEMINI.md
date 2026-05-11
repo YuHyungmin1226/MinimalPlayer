@@ -10,9 +10,8 @@
    .\venv\Scripts\activate
    pip install -r requirements.txt
    ```
-2. **MPV 라이브러리 설치**:
-   - `mpv-1.dll` 파일이 `main.py`와 같은 위치에 있어야 합니다.
-   - [mpv-player-windows](https://sourceforge.net/projects/mpv-player-windows/files/libmpv/)에서 최신 `64-bit` libmpv를 다운로드하여 압축을 풀고 `mpv-1.dll`을 프로젝트 루트에 복사하세요.
+2. **MPV 라이브러리 자동 다운로드**:
+   - `mpv-1.dll`은 수동으로 다운로드할 필요 없이 `main.py` 최초 실행 시 자동으로 GitHub Release에서 다운로드되어 프로젝트 루트에 배치됩니다.
 
 ## 3. UI/UX 원칙
 - **미니멀리즘**: 불필요한 테두리와 메뉴바를 제거하고, 영상 콘텐츠에 집중합니다.

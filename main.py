@@ -1,14 +1,58 @@
 import sys
 import os
+import urllib.request
 from PySide6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QWidget, 
                              QPushButton, QHBoxLayout, QSlider, QLabel, QFrame,
-                             QFileDialog, QMessageBox)
+                             QFileDialog, QMessageBox, QProgressDialog)
 from PySide6.QtCore import Qt, QTimer, QPoint, QSize
 from PySide6.QtGui import QColor, QPalette, QIcon
 
 # Portable path configuration
 # mpv-1.dll이 실행 파일과 같은 경로에 있을 경우 이를 로드하도록 설정
 os.environ["PATH"] = os.path.dirname(__file__) + os.pathsep + os.environ["PATH"]
+
+def check_and_download_mpv():
+    dll_path = os.path.join(os.path.dirname(__file__), "mpv-1.dll")
+    if os.path.exists(dll_path):
+        return
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    
+    msg = QMessageBox()
+    msg.setIcon(QMessageBox.Information)
+    msg.setWindowTitle("다운로드 필요")
+    msg.setText("최초 실행을 위해 필수 파일(mpv-1.dll, 약 118MB)을 다운로드합니다.\n계속하시겠습니까?")
+    msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+    if msg.exec() != QMessageBox.Yes:
+        sys.exit(0)
+
+    progress = QProgressDialog("mpv-1.dll 다운로드 중...", "취소", 0, 100)
+    progress.setWindowTitle("다운로드 진행 상태")
+    progress.setWindowModality(Qt.WindowModal)
+    progress.resize(400, 100)
+    progress.show()
+
+    def report(blocknum, blocksize, totalsize):
+        readsofar = blocknum * blocksize
+        if totalsize > 0:
+            percent = int(readsofar * 100 / totalsize)
+            progress.setValue(percent)
+            QApplication.processEvents()
+        if progress.wasCanceled():
+            raise Exception("다운로드가 취소되었습니다.")
+
+    url = "https://github.com/YuHyungmin1226/MinimalPlayer/releases/download/v1.0/mpv-1.dll"
+    try:
+        urllib.request.urlretrieve(url, dll_path, report)
+    except Exception as e:
+        QMessageBox.critical(None, "다운로드 실패", f"다운로드 중 오류가 발생했습니다:\n{e}\n\nGitHub Release 페이지에서 직접 다운로드하여 실행 파일과 같은 폴더에 넣어주세요.")
+        if os.path.exists(dll_path):
+            os.remove(dll_path)
+        sys.exit(1)
+    
+    progress.setValue(100)
+
+check_and_download_mpv()
 
 import mpv
 
@@ -383,7 +427,7 @@ class VideoPlayer(QMainWindow):
             self.load_video(files[0])
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
+    app = QApplication.instance() or QApplication(sys.argv)
     app.setStyle("Fusion") # QSS 호환성을 위해 Fusion 스타일 적용
     player = VideoPlayer()
     player.setAcceptDrops(True)
