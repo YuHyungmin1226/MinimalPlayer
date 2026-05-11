@@ -2,13 +2,6 @@
 
 저사양 노트북 및 미니 PC에서도 끊김 없이 동영상을 재생할 수 있도록 설계된 **초경량 포터블 동영상 플레이어**입니다. `mpv` 엔진을 기반으로 하여 압도적인 퍼포먼스와 미니멀한 UI를 제공합니다.
 
-## 📥 다운로드 (Download)
-
-설치 없이 바로 사용 가능한 실행 파일은 아래 링크에서 받으실 수 있습니다:
-👉 **[최신 버전 다운로드 (Releases)](https://github.com/YuHyungmin1226/MinimalPlayer/releases)**
-
-- `MinimalPlayer.exe`: 파이썬 설치 없이 단독 실행 가능한 파일입니다. (최초 실행 시 `mpv-1.dll`을 자동으로 다운로드합니다.)
-
 ## ✨ 주요 특징
 
 - **🚀 초경량 & 고성능**: 저사양 환경에서도 4K 영상까지 부드럽게 재생.
@@ -36,12 +29,6 @@
 
 ## 🚀 시작하기 (How to Use)
 
-### 1. 실행 파일(.exe)로 사용하기
-1. [Releases](https://github.com/YuHyungmin1226/MinimalPlayer/releases)에서 `MinimalPlayer.exe`를 다운로드합니다.
-2. 실행하면 최초 1회에 한하여 `mpv-1.dll` 엔진이 자동으로 다운로드됩니다.
-3. 영상을 창 위로 끌어다 놓으면 즉시 감상할 수 있습니다.
-
-### 2. 개발 환경에서 실행하기
 1. 프로젝트 클론: `git clone https://github.com/YuHyungmin1226/MinimalPlayer.git`
 2. 폴더 이동: `cd MinimalPlayer`
 3. 파이썬 가상환경 생성 및 활성화:
