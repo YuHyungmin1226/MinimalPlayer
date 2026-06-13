@@ -3,12 +3,12 @@ import os
 import urllib.request
 from PySide6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QWidget, 
                              QPushButton, QHBoxLayout, QSlider, QLabel, QFrame,
-                             QFileDialog, QMessageBox, QProgressDialog)
+                             QFileDialog, QMessageBox, QProgressDialog, QMenu)
 from PySide6.QtCore import Qt, QTimer, QPoint, QSize
-from PySide6.QtGui import QColor, QPalette, QIcon
+from PySide6.QtGui import QColor, QPalette, QIcon, QAction
 
 # Portable path configuration
-# mpv-1.dll이 실행 파일과 같은 경로에 있을 경우 이를 로드하도록 설정
+# Add current directory to PATH so mpv-1.dll can be loaded if present
 os.environ["PATH"] = os.path.dirname(__file__) + os.pathsep + os.environ["PATH"]
 
 def check_and_download_mpv():
@@ -20,14 +20,14 @@ def check_and_download_mpv():
     
     msg = QMessageBox()
     msg.setIcon(QMessageBox.Information)
-    msg.setWindowTitle("다운로드 필요")
-    msg.setText("최초 실행을 위해 필수 파일(mpv-1.dll, 약 118MB)을 다운로드합니다.\n계속하시겠습니까?")
+    msg.setWindowTitle("Download Required")
+    msg.setText("Download required file (mpv-1.dll, ~118MB) for first run.\nDo you want to continue?")
     msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
     if msg.exec() != QMessageBox.Yes:
         sys.exit(0)
 
-    progress = QProgressDialog("mpv-1.dll 다운로드 중...", "취소", 0, 100)
-    progress.setWindowTitle("다운로드 진행 상태")
+    progress = QProgressDialog("Downloading mpv-1.dll...", "Cancel", 0, 100)
+    progress.setWindowTitle("Download Progress")
     progress.setWindowModality(Qt.WindowModal)
     progress.resize(400, 100)
     progress.show()
@@ -39,13 +39,13 @@ def check_and_download_mpv():
             progress.setValue(percent)
             QApplication.processEvents()
         if progress.wasCanceled():
-            raise Exception("다운로드가 취소되었습니다.")
+            raise Exception("Download canceled.")
 
     url = "https://github.com/YuHyungmin1226/MinimalPlayer/releases/download/v1.0/mpv-1.dll"
     try:
         urllib.request.urlretrieve(url, dll_path, report)
     except Exception as e:
-        QMessageBox.critical(None, "다운로드 실패", f"다운로드 중 오류가 발생했습니다:\n{e}\n\nGitHub Release 페이지에서 직접 다운로드하여 실행 파일과 같은 폴더에 넣어주세요.")
+        QMessageBox.critical(None, "Download Failed", f"An error occurred during download:\n{e}\n\nPlease download it manually from the GitHub Release page and place it in the same directory.")
         if os.path.exists(dll_path):
             os.remove(dll_path)
         sys.exit(1)
@@ -53,6 +53,79 @@ def check_and_download_mpv():
     progress.setValue(100)
 
 check_and_download_mpv()
+
+def register_file_associations(silent=False):
+    """
+    Register MinimalPlayer to Windows registry for file associations under HKCU.
+    """
+    if os.name != 'nt':
+        return False
+
+    import winreg
+    import ctypes
+
+    # 실행 경로 가져오기
+    if getattr(sys, 'frozen', False):
+        exe_path = os.path.abspath(sys.executable)
+        cmd = f'"{exe_path}" "%1"'
+    else:
+        python_exe = os.path.abspath(sys.executable)
+        script_path = os.path.abspath(sys.argv[0])
+        cmd = f'"{python_exe}" "{script_path}" "%1"'
+        exe_path = python_exe
+
+    prog_id = "MinimalPlayer"
+    app_name = "Minimal Portable Player"
+    
+    try:
+        # 1. HKCU\Software\Classes\MinimalPlayer 등록
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, rf"Software\Classes\{prog_id}") as key:
+            winreg.SetValue(key, "", winreg.REG_SZ, app_name)
+            
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, rf"Software\Classes\{prog_id}\shell\open\command") as key:
+            winreg.SetValue(key, "", winreg.REG_SZ, cmd)
+            
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, rf"Software\Classes\{prog_id}\DefaultIcon") as key:
+            winreg.SetValue(key, "", winreg.REG_SZ, f"{exe_path},0")
+
+        # 2. Capabilities 등록 (Default Apps 설정 페이지에 노출하기 위해 필요)
+        capabilities_path = rf"Software\{prog_id}\Capabilities"
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, capabilities_path) as key:
+            winreg.SetValueEx(key, "ApplicationName", 0, winreg.REG_SZ, "MinimalPlayer")
+            winreg.SetValueEx(key, "ApplicationDescription", 0, winreg.REG_SZ, "Lightweight Minimal Video Player")
+            
+        # 지원할 확장자 목록
+        extensions = [
+            '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', 
+            '.3gp', '.mpeg', '.mpg', '.ts', '.tp', '.asf', '.m4v'
+        ]
+        
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, rf"{capabilities_path}\FileAssociations") as key:
+            for ext in extensions:
+                winreg.SetValueEx(key, ext, 0, winreg.REG_SZ, prog_id)
+                
+        # HKCU\Software\RegisteredApplications에 등록
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\RegisteredApplications") as key:
+            winreg.SetValueEx(key, "MinimalPlayer", 0, winreg.REG_SZ, capabilities_path)
+            
+        # 3. 각 확장자의 OpenWithProgids에 MinimalPlayer를 빈 값으로 매핑
+        for ext in extensions:
+            assoc_path = rf"Software\Classes\{ext}\OpenWithProgids"
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, assoc_path) as key:
+                winreg.SetValueEx(key, prog_id, 0, winreg.REG_NONE, b"")
+                
+        # Send Shell notification to update file associations immediately
+        try:
+            ctypes.windll.shell32.SHChangeNotify(0x08000000, 0, None, None) # SHCNE_ASSOCCHANGED
+        except Exception as shell_err:
+            if not silent:
+                print(f"Failed to send Shell notification: {shell_err}")
+                
+        return True
+    except Exception as e:
+        if not silent:
+            print(f"Registry registration failed: {e}")
+        return False
 
 import mpv
 
@@ -112,13 +185,30 @@ QLabel {
     color: #eee;
     font-weight: bold;
 }
+QMenu {
+    background-color: #1e1e1e;
+    color: #eee;
+    border: 1px solid #333;
+}
+QMenu::item {
+    background-color: transparent;
+    padding: 6px 20px;
+}
+QMenu::item:selected {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+QMenu::separator {
+    height: 1px;
+    background: #333;
+    margin: 4px 0;
+}
 """
 
 # Custom Slider to support jump-to-click
 class ClickableSlider(QSlider):
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            # 클릭한 위치로 슬라이더 핸들을 즉시 이동
+            # Move slider handle directly to clicked position
             new_value = self.minimum() + (self.maximum() - self.minimum()) * event.position().x() / self.width()
             self.setValue(int(new_value))
             self.sliderMoved.emit(int(new_value))
@@ -127,7 +217,7 @@ class ClickableSlider(QSlider):
 class VideoPlayer(QMainWindow):
     def __init__(self):
         super().__init__()
-        # 프레임리스 윈도우 설정 (미니멀리즘 디자인)
+        # Set frameless window for minimal design
         self.setWindowFlags(Qt.FramelessWindowHint)
         self.resize(1000, 600)
         self.setStyleSheet(STYLE)
@@ -138,7 +228,7 @@ class VideoPlayer(QMainWindow):
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
 
-        # 커스텀 타이틀바
+        # Custom titlebar
         self.title_bar = QFrame()
         self.title_bar.setObjectName("TitleBar")
         self.title_bar.setFixedHeight(35)
@@ -155,7 +245,7 @@ class VideoPlayer(QMainWindow):
         self.min_btn.setFocusPolicy(Qt.NoFocus)
         self.min_btn.clicked.connect(self.showMinimized)
         
-        self.close_btn = QPushButton("×")
+        self.close_btn = QPushButton("x")
         self.close_btn.setFixedSize(40, 35)
         self.close_btn.setFocusPolicy(Qt.NoFocus)
         self.close_btn.clicked.connect(self.close)
@@ -166,53 +256,53 @@ class VideoPlayer(QMainWindow):
         
         self.main_layout.addWidget(self.title_bar)
 
-        # 영상 출력 영역
+        # Video output container
         self.video_container = QWidget()
         self.video_container.setObjectName("VideoContainer")
         self.video_container.setAttribute(Qt.WA_NativeWindow)
         self.main_layout.addWidget(self.video_container, 1)
 
-        # 하단 컨트롤 바
+        # Bottom control bar
         self.control_bar = QFrame()
         self.control_bar.setObjectName("ControlBar")
         self.control_bar.setFixedHeight(70)
         self.control_layout = QVBoxLayout(self.control_bar)
         self.control_layout.setContentsMargins(15, 5, 15, 10)
 
-        # 재생 바 (Seek Slider) - 커스텀 슬라이더 사용
+        # Seek Slider - Custom slider
         self.seek_slider = ClickableSlider(Qt.Horizontal)
         self.seek_slider.setCursor(Qt.PointingHandCursor)
         self.seek_slider.setFocusPolicy(Qt.NoFocus)
         self.seek_slider.sliderMoved.connect(self.seek)
         self.control_layout.addWidget(self.seek_slider)
 
-        # 하단 버튼 레이아웃
+        # Bottom buttons layout
         self.btns_layout = QHBoxLayout()
         self.btns_layout.setSpacing(10)
         self.btns_layout.setAlignment(Qt.AlignVCenter)
         
-        # 파일 열기 버튼 추가
-        self.open_btn = QPushButton("📁")
+        # Add file open button
+        self.open_btn = QPushButton("Open")
         self.open_btn.setFixedSize(45, 35)
         self.open_btn.setToolTip("Open File")
         self.open_btn.setFocusPolicy(Qt.NoFocus)
         self.open_btn.clicked.connect(self.open_file_dialog)
         self.btns_layout.addWidget(self.open_btn)
 
-        # 건너띄기 버튼 추가 (뒤로 10초)
+        # Seek back button (10s)
         self.back_btn = QPushButton("<<")
         self.back_btn.setFixedSize(45, 35)
         self.back_btn.setFocusPolicy(Qt.NoFocus)
         self.back_btn.clicked.connect(lambda: self.skip(-10))
         self.btns_layout.addWidget(self.back_btn)
 
-        self.play_btn = QPushButton("▶")
+        self.play_btn = QPushButton("Play")
         self.play_btn.setFixedSize(60, 35)
         self.play_btn.setFocusPolicy(Qt.NoFocus)
         self.play_btn.clicked.connect(self.toggle_pause)
         self.btns_layout.addWidget(self.play_btn)
 
-        # 건너띄기 버튼 추가 (앞으로 10초)
+        # Seek forward button (10s)
         self.fwd_btn = QPushButton(">>")
         self.fwd_btn.setFixedSize(45, 35)
         self.fwd_btn.setFocusPolicy(Qt.NoFocus)
@@ -220,18 +310,18 @@ class VideoPlayer(QMainWindow):
         self.btns_layout.addWidget(self.fwd_btn)
 
         self.time_label = QLabel("00:00 / 00:00")
-        self.time_label.setFixedHeight(35) # 버튼 높이와 동일하게 설정
-        self.time_label.setAlignment(Qt.AlignCenter) # 텍스트 수직/수평 중앙 정렬
+        self.time_label.setFixedHeight(35) # Same height as buttons
+        self.time_label.setAlignment(Qt.AlignCenter) # Align center
         self.btns_layout.addWidget(self.time_label)
         self.btns_layout.addStretch()
 
-        # 볼륨 컨트롤
+        # Volume control
         self.vol_label = QLabel("Volume")
         self.vol_label.setFixedHeight(35)
         self.vol_label.setAlignment(Qt.AlignCenter)
         self.btns_layout.addWidget(self.vol_label)
         self.vol_slider = QSlider(Qt.Horizontal)
-        self.vol_slider.setFixedHeight(35) # 높이 통일
+        self.vol_slider.setFixedHeight(35) # Same height
         self.vol_slider.setFixedWidth(100)
         self.vol_slider.setRange(0, 100)
         self.vol_slider.setValue(100)
@@ -244,37 +334,37 @@ class VideoPlayer(QMainWindow):
         self.control_layout.addLayout(self.btns_layout)
         self.main_layout.addWidget(self.control_bar)
 
-        # MPV 엔진 초기화
+        # Initialize MPV Engine
         try:
             self.player = mpv.MPV(wid=str(int(self.video_container.winId())),
                                   ytdl=True,
                                   input_default_bindings=True,
                                   input_vo_keyboard=True,
-                                  osc=False) # 내장 UI 비활성화
+                                  osc=False) # Disable default OSC
         except Exception as e:
             QMessageBox.critical(
-                self, "라이브러리 로드 오류",
-                "mpv-1.dll 파일을 찾을 수 없거나 로드에 실패했습니다.\n\n"
-                "GitHub 릴리즈 페이지에서 'mpv-1.dll'을 다운로드하여\n"
-                "실행 파일과 같은 폴더에 넣어주세요."
+                self, "Library Load Error",
+                "Could not find or load mpv-1.dll.\n\n"
+                "Please download 'mpv-1.dll' from the GitHub releases page\n"
+                "and place it in the same directory as the executable."
             )
-            print(f"MPV 초기화 오류: {e}")
+            print(f"MPV initialization error: {e}")
             sys.exit(1)
 
-        # UI 갱신 타이머 (5fps 정도로 갱신)
+        # UI update timer (~5fps)
         self.timer = QTimer()
         self.timer.setInterval(200)
         self.timer.timeout.connect(self.update_status)
         self.timer.start()
 
         self._drag_pos = None
-        self.setFocus() # 초기 포커스 설정
+        self.setFocus() # Set initial focus
 
     def toggle_pause(self):
         if self.player:
             self.player.pause = not self.player.pause
-            # ⏸ 이모지 대신 텍스트 기호 || 를 사용하여 파란색 배경 제거
-            self.play_btn.setText("▶" if self.player.pause else "||")
+            # Toggle play/pause text
+            self.play_btn.setText("Play" if self.player.pause else "Pause")
 
     def seek(self, position):
         if self.player:
@@ -282,35 +372,34 @@ class VideoPlayer(QMainWindow):
 
     def set_volume(self, value):
         if self.player:
-            # 볼륨 범위 제한 (0~100)
+            # Limit volume range (0-100)
             new_vol = max(0, min(100, value))
             self.player.volume = new_vol
-            # UI 슬라이더 위치 동기화
+            # Sync UI slider position
             self.vol_slider.setValue(new_vol)
 
     def skip(self, seconds):
         if self.player:
-            # mpv의 seek 메서드 사용 (상대적 이동)
+            # Use mpv seek method (relative)
             self.player.seek(seconds, reference='relative')
 
     def adjust_sub_delay(self, delta):
         if self.player:
-            # 자막 지연 시간 조정 (단위: 초)
+            # Adjust subtitle delay (seconds)
             current = getattr(self.player, 'sub_delay', 0)
             self.player.sub_delay = current + delta
-            # 간단한 상태 표시 (콘솔 출력 및 타이틀 바 임시 변경 가능)
-            print(f"자막 싱크 조정: {self.player.sub_delay:.1f}s")
+            # Print status
+            print(f"Subtitle sync delay: {self.player.sub_delay:.1f}s")
 
     def update_status(self):
         try:
             if self.player:
-                # 재생 버튼 상태 동기화
-                # 영상이 로드된 경우(time_pos가 None이 아님)에만 실제 pause 상태 반영
-                # 그 외(시작 시, 영상 종료 시 등)에는 ▶ 버튼으로 표시
+                # Sync play button status
+                # Only sync status when video is loaded (time_pos is not None)
                 if self.player.time_pos is not None:
-                    play_text = "▶" if self.player.pause else "||"
+                    play_text = "Play" if self.player.pause else "Pause"
                 else:
-                    play_text = "▶"
+                    play_text = "Play"
                 
                 if self.play_btn.text() != play_text:
                     self.play_btn.setText(play_text)
@@ -324,7 +413,7 @@ class VideoPlayer(QMainWindow):
                     
                     self.time_label.setText(f"{self.format_time(curr)} / {self.format_time(total)}")
         except (mpv.ShutdownError, AttributeError):
-            # 플레이어가 이미 종료된 경우 타이머 정지
+            # Stop timer if player is already terminated
             if hasattr(self, 'timer'):
                 self.timer.stop()
 
@@ -335,7 +424,7 @@ class VideoPlayer(QMainWindow):
 
     def open_file_dialog(self):
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "영상 파일 선택", "", 
+            self, "Select Video File", "", 
             "Video Files (*.mp4 *.mkv *.avi *.mov *.wmv);;All Files (*)"
         )
         if file_path:
@@ -346,17 +435,17 @@ class VideoPlayer(QMainWindow):
         self.player.play(path)
         self.title_label.setText(os.path.basename(path))
         
-        # 자막 자동 로드 로직 (동일 파일명 감지)
+        # Auto load subtitle (detect same filename)
         base = os.path.splitext(path)[0]
-        # 주요 자막 확장자 체크
+        # Check major subtitle extensions
         for ext in ['.srt', '.ass', '.vtt', '.smi']:
             sub_path = base + ext
             if os.path.exists(sub_path):
-                print(f"자막 발견 및 로드: {sub_path}")
+                print(f"Subtitle found and loaded: {sub_path}")
                 self.player.sub_add(sub_path)
                 break
 
-    # 키보드 이벤트 처리
+    # Keyboard event handler
     def keyPressEvent(self, event):
         key = event.key()
         if key == Qt.Key_Space:
@@ -366,13 +455,13 @@ class VideoPlayer(QMainWindow):
         elif key == Qt.Key_Right:
             self.skip(5)
         elif key == Qt.Key_Up:
-            # 볼륨 5% 증가
+            # Increase volume by 5%
             self.set_volume(self.player.volume + 5)
         elif key == Qt.Key_Down:
-            # 볼륨 5% 감소
+            # Decrease volume by 5%
             self.set_volume(self.player.volume - 5)
         elif key == Qt.Key_Return or key == Qt.Key_Enter:
-            # 전체화면 토글
+            # Toggle full screen
             if self.isFullScreen():
                 self.showNormal()
             else:
@@ -386,10 +475,10 @@ class VideoPlayer(QMainWindow):
         else:
             super().keyPressEvent(event)
 
-    # 마우스 드래그 및 버튼 클릭 보장
+    # Handle window drag
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            # 자식 위젯(버튼 등)이 이벤트를 처리하지 않은 경우에만 드래그 시작
+            # Start drag only if child widgets did not handle the event
             if self.childAt(event.position().toPoint()) is None or \
                self.childAt(event.position().toPoint()) in [self.video_container, self.title_bar, self.control_bar]:
                 self._drag_pos = event.globalPosition().toPoint()
@@ -406,7 +495,7 @@ class VideoPlayer(QMainWindow):
         self._drag_pos = None
 
     def closeEvent(self, event):
-        # 타이머 정지 및 mpv 리소스 해제
+        # Stop timer and release mpv resources
         if hasattr(self, 'timer'):
             self.timer.stop()
         if hasattr(self, 'player') and self.player:
@@ -416,7 +505,7 @@ class VideoPlayer(QMainWindow):
                 pass
         super().closeEvent(event)
 
-    # 드래그 앤 드롭 파일 로드
+    # Drag and drop file loading
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             event.accept()
@@ -426,10 +515,86 @@ class VideoPlayer(QMainWindow):
         if files:
             self.load_video(files[0])
 
+    # Right-click context menu
+    def contextMenuEvent(self, event):
+        menu = QMenu(self)
+        
+        open_action = QAction("Open File...", self)
+        open_action.triggered.connect(self.open_file_dialog)
+        menu.addAction(open_action)
+        
+        menu.addSeparator()
+        
+        register_action = QAction("Set as Default App", self)
+        register_action.triggered.connect(self.setup_default_program)
+        menu.addAction(register_action)
+        
+        menu.addSeparator()
+        
+        exit_action = QAction("Exit", self)
+        exit_action.triggered.connect(self.close)
+        menu.addAction(exit_action)
+        
+        menu.exec(event.globalPos())
+
+    # Register default app and redirect to Windows Settings
+    def setup_default_program(self):
+        success = register_file_associations(silent=True)
+        if not success:
+            QMessageBox.warning(
+                self, "Error", 
+                "An error occurred during registry write for default program registration.\n"
+                "Please check if your antivirus software is blocking registry writes."
+            )
+            return
+
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Default Program Settings")
+        msg_box.setText(
+            "MinimalPlayer has been registered to the file association list.\n\n"
+            "Due to Windows policies, you must manually select the default app in Settings to apply the change.\n\n"
+            "Click OK to open the Windows 'Default Apps' Settings page.\n"
+            "Search for 'MinimalPlayer' and set it as the default app."
+        )
+        msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        msg_box.setDefaultButton(QMessageBox.Yes)
+        msg_box.setButtonText(QMessageBox.Yes, "OK (Open Settings)")
+        msg_box.setButtonText(QMessageBox.No, "Cancel")
+        
+        if msg_box.exec() == QMessageBox.Yes:
+            try:
+                os.startfile("ms-settings:defaultapps?registeredApp=MinimalPlayer")
+            except Exception:
+                try:
+                    os.startfile("ms-settings:defaultapps")
+                except Exception as e:
+                    QMessageBox.critical(
+                        self, "Execution Failed", 
+                        f"Failed to open Settings:\n{e}\n\n"
+                        "Please search for 'Default apps' manually in the Windows Start menu."
+                    )
+
 if __name__ == "__main__":
+    # Run in CLI mode if --register option is provided
+    if len(sys.argv) > 1 and sys.argv[1] == "--register":
+        success = register_file_associations(silent=False)
+        if success:
+            print("MinimalPlayer registered successfully to registry.")
+            sys.exit(0)
+        else:
+            print("An error occurred during registry registration.")
+            sys.exit(1)
+
     app = QApplication.instance() or QApplication(sys.argv)
-    app.setStyle("Fusion") # QSS 호환성을 위해 Fusion 스타일 적용
+    app.setStyle("Fusion") # Apply Fusion style for QSS compatibility
     player = VideoPlayer()
     player.setAcceptDrops(True)
     player.show()
+
+    # Play video if file path is provided as argument
+    if len(sys.argv) > 1:
+        video_path = sys.argv[1]
+        if os.path.exists(video_path):
+            player.load_video(video_path)
+
     sys.exit(app.exec())
