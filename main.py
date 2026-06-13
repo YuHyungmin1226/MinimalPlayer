@@ -8,11 +8,16 @@ from PySide6.QtCore import Qt, QTimer, QPoint, QSize
 from PySide6.QtGui import QColor, QPalette, QIcon, QAction
 
 # Portable path configuration
-# Add current directory to PATH so mpv-1.dll can be loaded if present
-os.environ["PATH"] = os.path.dirname(__file__) + os.pathsep + os.environ["PATH"]
+if getattr(sys, 'frozen', False):
+    base_dir = os.path.dirname(sys.executable)
+else:
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Add executable directory to PATH so mpv-1.dll can be loaded if present
+os.environ["PATH"] = base_dir + os.pathsep + os.environ["PATH"]
 
 def check_and_download_mpv():
-    dll_path = os.path.join(os.path.dirname(__file__), "mpv-1.dll")
+    dll_path = os.path.join(base_dir, "mpv-1.dll")
     if os.path.exists(dll_path):
         return
 
