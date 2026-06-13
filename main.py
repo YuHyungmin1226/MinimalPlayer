@@ -329,7 +329,7 @@ class VideoPlayer(QMainWindow):
         self.vol_slider.setFixedHeight(35) # Same height
         self.vol_slider.setFixedWidth(100)
         self.vol_slider.setRange(0, 100)
-        self.vol_slider.setValue(100)
+        self.vol_slider.setValue(0)
         self.vol_slider.setCursor(Qt.PointingHandCursor)
         self.vol_slider.setFocusPolicy(Qt.NoFocus)
         self.vol_slider.valueChanged.connect(self.set_volume)
@@ -346,6 +346,8 @@ class VideoPlayer(QMainWindow):
                                   input_default_bindings=True,
                                   input_vo_keyboard=True,
                                   osc=False) # Disable default OSC
+            # Set initial volume to 0% (sync with vol_slider)
+            self.player.volume = self.vol_slider.value()
         except Exception as e:
             QMessageBox.critical(
                 self, "Library Load Error",
