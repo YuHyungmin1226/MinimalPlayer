@@ -1,11 +1,19 @@
 import sys
 import os
+import locale
+import subprocess
 import urllib.request
-from PySide6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QWidget, 
+from PySide6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QWidget,
                              QPushButton, QHBoxLayout, QSlider, QLabel, QFrame,
                              QFileDialog, QMessageBox, QProgressDialog, QMenu)
-from PySide6.QtCore import Qt, QTimer, QPoint, QSize
-from PySide6.QtGui import QColor, QPalette, QIcon, QAction
+from PySide6.QtCore import Qt, QTimer, QPoint, QSize, Signal
+from PySide6.QtGui import QColor, QPalette, QIcon, QAction, QOpenGLContext
+from PySide6.QtOpenGLWidgets import QOpenGLWidget
+
+# Platform detection
+IS_WINDOWS = sys.platform.startswith("win")
+IS_MAC = sys.platform == "darwin"
+IS_LINUX = sys.platform.startswith("linux")
 
 # Portable path configuration
 if getattr(sys, 'frozen', False):
@@ -13,10 +21,8 @@ if getattr(sys, 'frozen', False):
 else:
     base_dir = os.path.dirname(os.path.abspath(__file__))
 
-# Add executable directory to PATH so mpv-1.dll can be loaded if present
-os.environ["PATH"] = base_dir + os.pathsep + os.environ["PATH"]
-
 def check_and_download_mpv():
+    # Windows only: the prebuilt portable mpv-1.dll is fetched on first run.
     dll_path = os.path.join(base_dir, "mpv-1.dll")
     if os.path.exists(dll_path):
         return
@@ -57,7 +63,62 @@ def check_and_download_mpv():
     
     progress.setValue(100)
 
-check_and_download_mpv()
+def _find_libmpv_dir():
+    """Locate a directory containing libmpv on macOS/Linux, or None if not found.
+
+    A libmpv bundled inside a frozen app (PyInstaller) is preferred so the app is
+    self-contained; a system-wide install (Homebrew, distro packages) is only used
+    as a fallback for running from source.
+    """
+    candidates = []
+    if getattr(sys, "frozen", False):
+        # Bundled copies first, so a packaged .app does not depend on Homebrew.
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            candidates.append(meipass)
+        candidates.append(base_dir)
+        # macOS .app layout: executable in Contents/MacOS, libs in Contents/Frameworks.
+        candidates.append(os.path.join(base_dir, os.pardir, "Frameworks"))
+    else:
+        candidates.append(base_dir)
+
+    if IS_MAC:
+        try:
+            prefix = subprocess.check_output(
+                ["brew", "--prefix"], text=True, stderr=subprocess.DEVNULL).strip()
+            if prefix:
+                candidates.append(os.path.join(prefix, "lib"))
+        except Exception:
+            pass
+        candidates += ["/opt/homebrew/lib", "/usr/local/lib"]
+        libnames = ["libmpv.dylib", "libmpv.2.dylib", "libmpv.1.dylib"]
+    else:  # Linux
+        candidates += ["/usr/lib", "/usr/local/lib", "/usr/lib/x86_64-linux-gnu",
+                       "/usr/lib64"]
+        libnames = ["libmpv.so", "libmpv.so.2", "libmpv.so.1"]
+    for d in candidates:
+        for name in libnames:
+            if os.path.isfile(os.path.join(d, name)):
+                return os.path.abspath(d)
+    return None
+
+def prepare_mpv_library():
+    """Make libmpv/mpv-1.dll discoverable before 'import mpv'."""
+    if IS_WINDOWS:
+        # Add executable directory to PATH so a bundled mpv-1.dll can be loaded.
+        os.environ["PATH"] = base_dir + os.pathsep + os.environ["PATH"]
+        check_and_download_mpv()
+        return
+    # macOS / Linux: point the dynamic loader at the libmpv directory if we find it.
+    # python-mpv resolves the library via ctypes.util.find_library('mpv'), which on
+    # macOS does not search Homebrew paths (e.g. /opt/homebrew/lib) by default.
+    lib_dir = _find_libmpv_dir()
+    if lib_dir:
+        env_key = "DYLD_FALLBACK_LIBRARY_PATH" if IS_MAC else "LD_LIBRARY_PATH"
+        existing = os.environ.get(env_key, "")
+        os.environ[env_key] = lib_dir + (os.pathsep + existing if existing else "")
+
+prepare_mpv_library()
 
 def register_file_associations(silent=False):
     """
@@ -132,7 +193,89 @@ def register_file_associations(silent=False):
             print(f"Registry registration failed: {e}")
         return False
 
-import mpv
+try:
+    import mpv
+except OSError as e:
+    # libmpv / mpv-1.dll could not be found or loaded. Show a platform-specific hint.
+    _app = QApplication.instance() or QApplication(sys.argv)
+    if IS_MAC:
+        hint = ("mpv is not installed. Install it with Homebrew:\n\n"
+                "    brew install mpv\n\n"
+                "Then restart MinimalPlayer.")
+    elif IS_LINUX:
+        hint = ("libmpv is not installed. Install it with your package manager, e.g.:\n\n"
+                "    sudo apt install libmpv2   (Debian/Ubuntu)\n"
+                "    sudo dnf install mpv-libs  (Fedora)\n\n"
+                "Then restart MinimalPlayer.")
+    else:
+        hint = ("Could not load mpv-1.dll.\n"
+                "Please place 'mpv-1.dll' next to the executable and restart.")
+    QMessageBox.critical(None, "mpv Library Not Found",
+                         f"Failed to load the mpv media library.\n\n{hint}\n\nDetails: {e}")
+    sys.exit(1)
+
+
+def _gl_get_proc_address(_ctx, name):
+    """OpenGL symbol resolver for libmpv's render API (used on macOS)."""
+    glctx = QOpenGLContext.currentContext()
+    if glctx is None:
+        return 0
+    if isinstance(name, bytes):
+        name = name.decode("utf-8")
+    return int(glctx.getProcAddress(name))
+
+
+class MpvGLWidget(QOpenGLWidget):
+    """Renders libmpv video via the OpenGL render API.
+
+    Used on macOS, where mpv's foreign-window (wid) embedding deadlocks Qt's
+    event loop. The mpv render-update callback fires on mpv's own thread, so it
+    only emits a signal; the actual repaint happens on the GUI thread.
+    """
+    _frame_ready = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._player = None
+        self._ctx = None
+        self._proc_addr = None
+        self._frame_ready.connect(self.update)
+
+    def set_player(self, player):
+        self._player = player
+
+    def initializeGL(self):
+        if self._player is None or self._ctx is not None:
+            return
+        # Keep a reference to the CFUNCTYPE wrapper so it is not garbage collected.
+        self._proc_addr = mpv.MpvGlGetProcAddressFn(_gl_get_proc_address)
+        self._ctx = mpv.MpvRenderContext(
+            self._player, "opengl",
+            opengl_init_params={"get_proc_address": self._proc_addr})
+        self._ctx.update_cb = self._on_mpv_update
+
+    def _on_mpv_update(self):
+        # Called from mpv's render thread; defer the repaint to the GUI thread.
+        self._frame_ready.emit()
+
+    def paintGL(self):
+        if self._ctx is None:
+            return
+        ratio = self.devicePixelRatioF()
+        w = max(1, int(round(self.width() * ratio)))
+        h = max(1, int(round(self.height() * ratio)))
+        self._ctx.render(flip_y=True,
+                         opengl_fbo={"w": w, "h": h,
+                                     "fbo": self.defaultFramebufferObject()})
+
+    def shutdown(self):
+        if self._ctx is not None:
+            try:
+                self._ctx.update_cb = None
+                self._ctx.free()
+            except Exception:
+                pass
+            self._ctx = None
 
 # Modern Dark Theme QSS
 STYLE = """
@@ -154,7 +297,7 @@ QPushButton {
     background: transparent;
     color: #eee;
     border: none;
-    font-family: "Segoe UI", "Arial", sans-serif;
+    font-family: "Segoe UI", "Helvetica Neue", "Arial", sans-serif;
     font-size: 14px;
     padding: 5px;
     outline: none;
@@ -261,10 +404,15 @@ class VideoPlayer(QMainWindow):
         
         self.main_layout.addWidget(self.title_bar)
 
-        # Video output container
-        self.video_container = QWidget()
+        # Video output container.
+        # macOS uses an OpenGL render widget; Windows/Linux embed mpv via a native
+        # window handle (wid). The MPV player is attached below in "Initialize MPV Engine".
+        if IS_MAC:
+            self.video_container = MpvGLWidget()
+        else:
+            self.video_container = QWidget()
+            self.video_container.setAttribute(Qt.WA_NativeWindow)
         self.video_container.setObjectName("VideoContainer")
-        self.video_container.setAttribute(Qt.WA_NativeWindow)
         self.main_layout.addWidget(self.video_container, 1)
 
         # Bottom control bar
@@ -340,20 +488,37 @@ class VideoPlayer(QMainWindow):
         self.main_layout.addWidget(self.control_bar)
 
         # Initialize MPV Engine
+        # libmpv requires LC_NUMERIC == "C". QApplication initialization (especially on
+        # macOS/Linux) can reset the C locale to the system locale, which makes mpv
+        # unstable and can segfault on creation. Re-assert it right before creating MPV.
+        locale.setlocale(locale.LC_NUMERIC, "C")
         try:
-            self.player = mpv.MPV(wid=str(int(self.video_container.winId())),
-                                  ytdl=True,
-                                  input_default_bindings=True,
-                                  input_vo_keyboard=True,
-                                  osc=False) # Disable default OSC
+            if IS_MAC:
+                # Render into the QOpenGLWidget via libmpv's render API.
+                self.player = mpv.MPV(vo="libmpv",
+                                      ytdl=True,
+                                      osc=False)
+                self.video_container.set_player(self.player)
+            else:
+                # Embed mpv directly into the native window via its handle.
+                self.player = mpv.MPV(wid=str(int(self.video_container.winId())),
+                                      ytdl=True,
+                                      input_default_bindings=True,
+                                      input_vo_keyboard=True,
+                                      osc=False) # Disable default OSC
             # Set initial volume to 0% (sync with vol_slider)
             self.player.volume = self.vol_slider.value()
         except Exception as e:
+            if IS_MAC:
+                detail = "Install mpv via Homebrew ('brew install mpv') and restart."
+            elif IS_LINUX:
+                detail = "Install libmpv via your package manager and restart."
+            else:
+                detail = ("Please download 'mpv-1.dll' from the GitHub releases page\n"
+                          "and place it in the same directory as the executable.")
             QMessageBox.critical(
                 self, "Library Load Error",
-                "Could not find or load mpv-1.dll.\n\n"
-                "Please download 'mpv-1.dll' from the GitHub releases page\n"
-                "and place it in the same directory as the executable."
+                "Could not initialize the mpv media engine.\n\n" + detail
             )
             print(f"MPV initialization error: {e}")
             sys.exit(1)
@@ -505,6 +670,9 @@ class VideoPlayer(QMainWindow):
         # Stop timer and release mpv resources
         if hasattr(self, 'timer'):
             self.timer.stop()
+        # Free the OpenGL render context (macOS) before terminating the player.
+        if isinstance(self.video_container, MpvGLWidget):
+            self.video_container.shutdown()
         if hasattr(self, 'player') and self.player:
             try:
                 self.player.terminate()
@@ -529,15 +697,16 @@ class VideoPlayer(QMainWindow):
         open_action = QAction("Open File...", self)
         open_action.triggered.connect(self.open_file_dialog)
         menu.addAction(open_action)
-        
+
         menu.addSeparator()
-        
-        register_action = QAction("Set as Default App", self)
-        register_action.triggered.connect(self.setup_default_program)
-        menu.addAction(register_action)
-        
-        menu.addSeparator()
-        
+
+        # File-association registration is Windows-only; hide it elsewhere.
+        if IS_WINDOWS:
+            register_action = QAction("Set as Default App", self)
+            register_action.triggered.connect(self.setup_default_program)
+            menu.addAction(register_action)
+            menu.addSeparator()
+
         exit_action = QAction("Exit", self)
         exit_action.triggered.connect(self.close)
         menu.addAction(exit_action)
