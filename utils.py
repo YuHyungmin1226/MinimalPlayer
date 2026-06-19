@@ -78,16 +78,51 @@ def convert_smi_to_srt_text(smi_text: str) -> str:
     return "\n\n".join(blocks) + ("\n" if blocks else "")
 
 
-def convert_smi_file_to_temp_srt(smi_path: str) -> str | None:
-    raw = open(smi_path, "rb").read()
+def _read_and_decode_subtitle(path: str) -> str:
+    """Read a subtitle file and decode with CJK encoding fallback."""
+    raw = open(path, "rb").read()
     for encoding in ("utf-8-sig", "cp949", "euc-kr"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            pass
+    return raw.decode("utf-8", errors="replace")
+
+
+def convert_subtitle_to_utf8(subtitle_path: str) -> str | None:
+    """If subtitle file is not valid UTF-8, re-encode as a UTF-8 temp file.
+
+    Returns the temp file path, or None if already valid UTF-8 or undecodable.
+    """
+    raw = open(subtitle_path, "rb").read()
+
+    # Already valid UTF-8 (with or without BOM) → no conversion needed
+    try:
+        raw.decode("utf-8-sig")
+        return None
+    except UnicodeDecodeError:
+        pass
+
+    text = None
+    for encoding in ("cp949", "euc-kr"):
         try:
             text = raw.decode(encoding)
             break
         except UnicodeDecodeError:
-            text = ""
-    if not text:
-        text = raw.decode("utf-8", errors="replace")
+            pass
+
+    if text is None:
+        return None  # let mpv try its own guess
+
+    _, ext = os.path.splitext(subtitle_path)
+    handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=ext, delete=False)
+    with handle:
+        handle.write(text)
+    return handle.name
+
+
+def convert_smi_file_to_temp_srt(smi_path: str) -> str | None:
+    text = _read_and_decode_subtitle(smi_path)
     srt_text = convert_smi_to_srt_text(text)
     if not srt_text.strip():
         return None

@@ -31,7 +31,7 @@ from constants import (
 )
 from file_association import register_file_associations
 from mpv_setup import IS_LINUX, IS_MAC, IS_WINDOWS
-from utils import convert_smi_file_to_temp_srt, find_matching_subtitle, format_time, is_supported_video, normalize_recent_files
+from utils import convert_smi_file_to_temp_srt, convert_subtitle_to_utf8, find_matching_subtitle, format_time, is_supported_video, normalize_recent_files
 
 mpv = cast(Any, importlib.import_module("mpv"))
 
@@ -334,9 +334,15 @@ class VideoPlayer(QMainWindow):
         self.converted_subtitle_paths = []
 
     def _subtitle_path_for_player(self, subtitle_path: str) -> str:
-        if os.path.splitext(subtitle_path)[1].lower() != ".smi":
+        ext = os.path.splitext(subtitle_path)[1].lower()
+        if ext == ".smi":
+            converted_path = convert_smi_file_to_temp_srt(subtitle_path)
+            if converted_path:
+                self.converted_subtitle_paths.append(converted_path)
+                return converted_path
             return subtitle_path
-        converted_path = convert_smi_file_to_temp_srt(subtitle_path)
+        # Re-encode non-UTF-8 SRT/ASS/VTT to UTF-8
+        converted_path = convert_subtitle_to_utf8(subtitle_path)
         if converted_path:
             self.converted_subtitle_paths.append(converted_path)
             return converted_path
