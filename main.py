@@ -9,7 +9,9 @@ from mpv_setup import IS_LINUX, IS_MAC, prepare_mpv_library
 def show_mpv_import_error(error: BaseException) -> None:
     if QApplication.instance() is None:
         QApplication(sys.argv)
-    if IS_MAC:
+    if isinstance(error, ImportError):
+        hint = "The python-mpv module is missing from this build. Rebuild MinimalPlayer with the bundled mpv hidden import."
+    elif IS_MAC:
         hint = "mpv is not installed. Install it with Homebrew:\n\n    brew install mpv\n\nThen restart MinimalPlayer."
     elif IS_LINUX:
         hint = (

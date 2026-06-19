@@ -69,6 +69,7 @@ def build():
         "--windowed",   # hide console / build a .app bundle
         "--noconfirm",
         "--clean",
+        "--hidden-import=mpv",
     ]
 
     # PyInstaller uses ';' as the add-binary separator on Windows and ':' elsewhere.
