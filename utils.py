@@ -1,4 +1,7 @@
 import os
+import re
+import tempfile
+from html import unescape
 from collections.abc import Iterable
 
 from constants import SUBTITLE_EXTENSIONS, VIDEO_EXTENSIONS
@@ -34,3 +37,61 @@ def normalize_recent_files(paths: Iterable[str] | None, new_path: str | None = N
         if len(result) >= limit:
             break
     return result
+
+
+def _format_srt_timestamp(milliseconds: int) -> str:
+    milliseconds = max(0, milliseconds)
+    seconds, millis = divmod(milliseconds, 1000)
+    minutes, secs = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+
+def _clean_smi_text(text: str) -> str:
+    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+    text = re.sub(r"\{\\[^}]+\}", "", text)
+    text = re.sub(r"(?is)<[^>]+>", "", text)
+    text = unescape(text).replace("\xa0", " ")
+    lines = [line.strip() for line in text.splitlines()]
+    return "\n".join(line for line in lines if line)
+
+
+def convert_smi_to_srt_text(smi_text: str) -> str:
+    matches = list(re.finditer(r"(?is)<sync\s+start\s*=\s*(\d+)\s*>", smi_text))
+    cues: list[tuple[int, int, str]] = []
+    starts = [int(match.group(1)) for match in matches]
+    for index, match in enumerate(matches):
+        start = starts[index]
+        body_start = match.end()
+        body_end = matches[index + 1].start() if index + 1 < len(matches) else len(smi_text)
+        text = _clean_smi_text(smi_text[body_start:body_end])
+        if not text:
+            continue
+        later_starts = [candidate for candidate in starts[index + 1:] if candidate > start]
+        end = later_starts[0] if later_starts else start + 3000
+        if end <= start:
+            end = start + 3000
+        cues.append((start, end, text))
+    blocks = []
+    for number, (start, end, text) in enumerate(cues, 1):
+        blocks.append(f"{number}\n{_format_srt_timestamp(start)} --> {_format_srt_timestamp(end)}\n{text}")
+    return "\n\n".join(blocks) + ("\n" if blocks else "")
+
+
+def convert_smi_file_to_temp_srt(smi_path: str) -> str | None:
+    raw = open(smi_path, "rb").read()
+    for encoding in ("utf-8-sig", "cp949", "euc-kr"):
+        try:
+            text = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            text = ""
+    if not text:
+        text = raw.decode("utf-8", errors="replace")
+    srt_text = convert_smi_to_srt_text(text)
+    if not srt_text.strip():
+        return None
+    handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".srt", delete=False)
+    with handle:
+        handle.write(srt_text)
+    return handle.name

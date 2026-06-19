@@ -31,7 +31,7 @@ from constants import (
 )
 from file_association import register_file_associations
 from mpv_setup import IS_LINUX, IS_MAC, IS_WINDOWS
-from utils import find_matching_subtitle, format_time, is_supported_video, normalize_recent_files
+from utils import convert_smi_file_to_temp_srt, find_matching_subtitle, format_time, is_supported_video, normalize_recent_files
 
 mpv = cast(Any, importlib.import_module("mpv"))
 
@@ -132,6 +132,7 @@ class VideoPlayer(QMainWindow):
         self.media_ended = False
         self.last_time_pos = 0
         self.last_duration = 0
+        self.converted_subtitle_paths = []
         self._drag_pos = None
 
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
@@ -323,6 +324,24 @@ class VideoPlayer(QMainWindow):
     def _remember_recent_file(self, path: str) -> None:
         self.settings.setValue("recentFiles", normalize_recent_files(self._recent_files(), path, RECENT_FILES_LIMIT))
 
+    def _cleanup_converted_subtitles(self):
+        for path in self.converted_subtitle_paths:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError:
+                pass
+        self.converted_subtitle_paths = []
+
+    def _subtitle_path_for_player(self, subtitle_path: str) -> str:
+        if os.path.splitext(subtitle_path)[1].lower() != ".smi":
+            return subtitle_path
+        converted_path = convert_smi_file_to_temp_srt(subtitle_path)
+        if converted_path:
+            self.converted_subtitle_paths.append(converted_path)
+            return converted_path
+        return subtitle_path
+
     def toggle_pause(self):
         if not self.has_video():
             return
@@ -414,6 +433,7 @@ class VideoPlayer(QMainWindow):
             return
 
         self._save_current_position()
+        self._cleanup_converted_subtitles()
         self.current_media_path = os.path.abspath(path)
         self.media_ended = False
         self.last_time_pos = 0
@@ -424,8 +444,9 @@ class VideoPlayer(QMainWindow):
 
         sub_path = find_matching_subtitle(self.current_media_path)
         if sub_path:
-            print(f"Subtitle found and loaded: {sub_path}")
-            self.player.sub_add(sub_path)
+            player_sub_path = self._subtitle_path_for_player(sub_path)
+            print(f"Subtitle found and loaded: {player_sub_path}")
+            self.player.sub_add(player_sub_path)
 
         QTimer.singleShot(500, lambda: self._maybe_resume(self.current_media_path))
 
@@ -472,6 +493,7 @@ class VideoPlayer(QMainWindow):
 
     def closeEvent(self, event):
         self._save_current_position()
+        self._cleanup_converted_subtitles()
         if hasattr(self, "timer"):
             self.timer.stop()
         if isinstance(self.video_container, MpvGLWidget):
