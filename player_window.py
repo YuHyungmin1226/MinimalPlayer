@@ -129,7 +129,9 @@ class VideoPlayer(QMainWindow):
         super().__init__()
         self.settings = QSettings(ORG_NAME, APP_NAME)
         self.current_media_path = None
-        self._resume_applied = False
+        self.media_ended = False
+        self.last_time_pos = 0
+        self.last_duration = 0
         self._drag_pos = None
 
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
@@ -324,6 +326,9 @@ class VideoPlayer(QMainWindow):
     def toggle_pause(self):
         if not self.has_video():
             return
+        if self.media_ended:
+            self.load_video(str(self.current_media_path))
+            return
         self.player.pause = not self.player.pause
         self.play_btn.setText("Play" if self.player.pause else "Pause")
 
@@ -340,7 +345,7 @@ class VideoPlayer(QMainWindow):
             self.vol_slider.setValue(new_vol)
 
     def skip(self, seconds: int) -> None:
-        if self.has_video():
+        if self.has_video() and not self.media_ended:
             self.player.seek(seconds, reference="relative")
 
     def adjust_sub_delay(self, delta: float) -> None:
@@ -355,14 +360,31 @@ class VideoPlayer(QMainWindow):
             if not self.player:
                 return
             play_text = "Play"
-            if self.has_video() and self.player.time_pos is not None:
+            time_pos = self.player.time_pos
+            duration = self.player.duration
+            idle_active = bool(getattr(self.player, "idle_active", False))
+
+            if self.has_video() and idle_active and time_pos is None and self.last_duration > 0:
+                self.media_ended = True
+                self.seek_slider.setMaximum(self.last_duration)
+                self.seek_slider.setValue(self.last_duration)
+                self.time_label.setText(f"{format_time(self.last_duration)} / {format_time(self.last_duration)}")
+                if self.play_btn.text() != "Play":
+                    self.play_btn.setText("Play")
+                return
+
+            if self.has_video() and time_pos is not None:
+                self.media_ended = False
                 play_text = "Play" if self.player.pause else "Pause"
             if self.play_btn.text() != play_text:
                 self.play_btn.setText(play_text)
 
-            if self.has_video() and self.player.time_pos is not None:
-                curr = int(self.player.time_pos)
-                total = int(self.player.duration or 0)
+            if self.has_video() and time_pos is not None:
+                curr = int(time_pos)
+                total = int(duration or 0)
+                self.last_time_pos = curr
+                if total > 0:
+                    self.last_duration = total
                 self.seek_slider.setMaximum(total)
                 if not self.seek_slider.isSliderDown():
                     self.seek_slider.setValue(curr)
@@ -393,7 +415,9 @@ class VideoPlayer(QMainWindow):
 
         self._save_current_position()
         self.current_media_path = os.path.abspath(path)
-        self._resume_applied = False
+        self.media_ended = False
+        self.last_time_pos = 0
+        self.last_duration = 0
         self.player.play(self.current_media_path)
         self.title_label.setText(os.path.basename(self.current_media_path))
         self._remember_recent_file(self.current_media_path)
