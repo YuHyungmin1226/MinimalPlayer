@@ -2,7 +2,7 @@ APP_NAME = "MinimalPlayer"
 APP_DISPLAY_NAME = "Minimal Portable Player"
 ORG_NAME = "MinimalPlayer"
 
-DEFAULT_VOLUME = 0
+DEFAULT_VOLUME = 70
 
 MPV_DLL_NAME = "mpv-1.dll"
 MPV_DLL_URL = "https://github.com/YuHyungmin1226/MinimalPlayer/releases/download/v1.0/mpv-1.dll"

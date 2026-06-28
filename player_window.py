@@ -121,7 +121,9 @@ class ClickableSlider(QSlider):
             new_value = self.minimum() + (self.maximum() - self.minimum()) * event.position().x() / self.width()
             self.setValue(int(new_value))
             self.sliderMoved.emit(int(new_value))
-        super().mousePressEvent(event)
+            event.accept()
+        else:
+            super().mousePressEvent(event)
 
 
 class VideoPlayer(QMainWindow):
@@ -259,7 +261,7 @@ class VideoPlayer(QMainWindow):
         locale.setlocale(locale.LC_NUMERIC, "C")
         try:
             if IS_MAC:
-                self.player = mpv.MPV(vo="libmpv", ytdl=True, osc=False)
+                self.player = mpv.MPV(vo="libmpv", ytdl=True, osc=False, keep_open=True)
                 if isinstance(self.video_container, MpvGLWidget):
                     self.video_container.set_player(self.player)
             else:
@@ -269,6 +271,7 @@ class VideoPlayer(QMainWindow):
                     input_default_bindings=False,
                     input_vo_keyboard=False,
                     osc=False,
+                    keep_open=True,
                 )
             self.player.volume = self.vol_slider.value()
         except Exception as e:
@@ -352,7 +355,10 @@ class VideoPlayer(QMainWindow):
         if not self.has_video():
             return
         if self.media_ended:
-            self.load_video(str(self.current_media_path))
+            self.player.time_pos = 0
+            self.player.pause = False
+            self.media_ended = False
+            self.play_btn.setText("Pause")
             return
         self.player.pause = not self.player.pause
         self.play_btn.setText("Play" if self.player.pause else "Pause")
@@ -388,8 +394,9 @@ class VideoPlayer(QMainWindow):
             time_pos = self.player.time_pos
             duration = self.player.duration
             idle_active = bool(getattr(self.player, "idle_active", False))
+            eof_reached = bool(getattr(self.player, "eof_reached", False))
 
-            if self.has_video() and idle_active and time_pos is None and self.last_duration > 0:
+            if self.has_video() and (eof_reached or (idle_active and time_pos is None)) and self.last_duration > 0:
                 self.media_ended = True
                 self.seek_slider.setMaximum(self.last_duration)
                 self.seek_slider.setValue(self.last_duration)
@@ -469,7 +476,14 @@ class VideoPlayer(QMainWindow):
         elif key == Qt.Key.Key_Down:
             self.set_volume(self.player.volume - 5)
         elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            self.showNormal() if self.isFullScreen() else self.showFullScreen()
+            if self.isFullScreen():
+                self.showNormal()
+                self.title_bar.show()
+                self.control_bar.show()
+            else:
+                self.showFullScreen()
+                self.title_bar.hide()
+                self.control_bar.hide()
         elif key == Qt.Key.Key_Z:
             self.adjust_sub_delay(0.1)
         elif key == Qt.Key.Key_X:

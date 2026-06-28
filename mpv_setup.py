@@ -122,6 +122,10 @@ def find_libmpv_dir() -> str | None:
 
 def prepare_mpv_library():
     if IS_WINDOWS:
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass and os.path.exists(os.path.join(meipass, MPV_DLL_NAME)):
+            os.environ["PATH"] = meipass + os.pathsep + os.environ["PATH"]
+            return
         os.environ["PATH"] = BASE_DIR + os.pathsep + os.environ["PATH"]
         check_and_download_mpv()
         return

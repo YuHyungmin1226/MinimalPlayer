@@ -19,11 +19,21 @@ def is_supported_video(path: str) -> bool:
 
 
 def find_matching_subtitle(video_path: str) -> str | None:
-    base = os.path.splitext(video_path)[0]
-    for ext in SUBTITLE_EXTENSIONS:
-        sub_path = base + ext
-        if os.path.exists(sub_path):
-            return sub_path
+    dir_name, file_name = os.path.split(video_path)
+    if not dir_name:
+        dir_name = "."
+    base_name, _ = os.path.splitext(file_name)
+    base_name_lower = base_name.lower()
+    
+    try:
+        with os.scandir(dir_name) as entries:
+            for entry in entries:
+                if entry.is_file():
+                    entry_base, entry_ext = os.path.splitext(entry.name)
+                    if entry_base.lower() == base_name_lower and entry_ext.lower() in SUBTITLE_EXTENSIONS:
+                        return entry.path
+    except Exception:
+        pass
     return None
 
 

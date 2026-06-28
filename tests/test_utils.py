@@ -22,6 +22,14 @@ class UtilsTest(unittest.TestCase):
             open(subtitle, "w", encoding="utf-8").close()
             self.assertEqual(find_matching_subtitle(video), subtitle)
 
+    def test_find_matching_subtitle_is_case_insensitive(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            video = os.path.join(temp_dir, "Clip.mp4")
+            subtitle = os.path.join(temp_dir, "clip.SRT")
+            open(video, "w", encoding="utf-8").close()
+            open(subtitle, "w", encoding="utf-8").close()
+            self.assertEqual(find_matching_subtitle(video), subtitle)
+
     def test_normalize_recent_files_deduplicates_existing_paths(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             first = os.path.join(temp_dir, "first.mp4")
