@@ -225,7 +225,7 @@ class VideoPlayer(QMainWindow):
         self.audio_sub_label.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
         self.audio_sub_label.setWordWrap(True)
         self.audio_sub_label.setStyleSheet(
-            "QLabel { background-color: rgba(0, 0, 0, 140); color: #fff; font-size: 22px; "
+            "QLabel { background-color: transparent; color: #fff; font-size: 22px; "
             "font-weight: bold; padding: 6px; }"
         )
         self.audio_sub_label.hide()
@@ -463,6 +463,7 @@ class VideoPlayer(QMainWindow):
                 text = self.player.sub_text or ""
                 if self.audio_sub_label.text() != text:
                     self.audio_sub_label.setText(text)
+                    self.audio_sub_label.setVisible(bool(text.strip()))
             play_text = "Play"
             time_pos = self.player.time_pos
             duration = self.player.duration
@@ -542,7 +543,7 @@ class VideoPlayer(QMainWindow):
             self._set_audio_image(image_path)
             self._audio_subtitle_on = bool(sub_path)
             self.audio_sub_label.setText("")
-            self.audio_sub_label.setVisible(bool(sub_path))
+            self.audio_sub_label.setVisible(False)
             self._reposition_audio_subtitle()
             self.media_stack.setCurrentWidget(self.audio_label)
         else:
