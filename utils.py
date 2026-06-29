@@ -105,7 +105,7 @@ def _format_srt_timestamp(milliseconds: int) -> str:
 
 def _filter_smi_by_lang(smi_part: str) -> str:
     # 1. Prioritize Korean subtitle classes (KRCC, KORCC)
-    kr_match = re.search(r"(?i)<P\s+Class\s*=\s*(KRCC|KORCC)\s*>", smi_part)
+    kr_match = re.search(r"(?i)<P\s+Class\s*=\s*['\"]?(KRCC|KORCC)['\"]?\s*>", smi_part)
     if kr_match:
         start_idx = kr_match.end()
         next_p = re.search(r"(?i)<P\s+Class\s*=", smi_part[start_idx:])
@@ -114,7 +114,7 @@ def _filter_smi_by_lang(smi_part: str) -> str:
         return smi_part[start_idx:]
 
     # 2. Fallback to the first class if Korean isn't found
-    any_p = re.search(r"(?i)<P\s+Class\s*=\s*([a-zA-Z0-9_-]+)\s*>", smi_part)
+    any_p = re.search(r"(?i)<P\s+Class\s*=\s*['\"]?([a-zA-Z0-9_-]+)['\"]?\s*>", smi_part)
     if any_p:
         start_idx = any_p.end()
         next_p = re.search(r"(?i)<P\s+Class\s*=", smi_part[start_idx:])

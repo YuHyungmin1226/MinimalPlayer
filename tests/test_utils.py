@@ -129,6 +129,18 @@ class UtilsTest(unittest.TestCase):
         self.assertIn("Hello", srt)
         self.assertNotIn("Konnichiwa", srt)
 
+    def test_convert_multilingual_smi_supports_quotes(self):
+        smi = (
+            "<SAMI><BODY>\n"
+            "<SYNC Start=1000>\n"
+            "  <P Class=\"KRCC\">안녕하세요\n"
+            "  <P Class='ENCC'>Hello\n"
+            "</BODY></SAMI>"
+        )
+        srt = convert_smi_to_srt_text(smi)
+        self.assertIn("안녕하세요", srt)
+        self.assertNotIn("Hello", srt)
+
 
 if __name__ == "__main__":
     unittest.main()

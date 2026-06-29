@@ -87,8 +87,10 @@ class MpvGLWidget(QOpenGLWidget):
     def shutdown(self):
         if self._ctx is not None:
             try:
+                self.makeCurrent()
                 self._ctx.update_cb = None
                 self._ctx.free()
+                self.doneCurrent()
             except Exception:
                 pass
             self._ctx = None
@@ -122,9 +124,7 @@ class ClickableSlider(QSlider):
             new_value = self.minimum() + (self.maximum() - self.minimum()) * event.position().x() / self.width()
             self.setValue(int(new_value))
             self.sliderMoved.emit(int(new_value))
-            event.accept()
-        else:
-            super().mousePressEvent(event)
+        super().mousePressEvent(event)
 
 
 class VideoPlayer(QMainWindow):
@@ -164,11 +164,15 @@ class VideoPlayer(QMainWindow):
         self.media_stack.setMouseTracking(True)
         self.video_container.setMouseTracking(True)
         self.audio_label.setMouseTracking(True)
+        self.title_bar.setMouseTracking(True)
+        self.control_bar.setMouseTracking(True)
 
         self.central_widget.installEventFilter(self)
         self.media_stack.installEventFilter(self)
         self.video_container.installEventFilter(self)
         self.audio_label.installEventFilter(self)
+        self.title_bar.installEventFilter(self)
+        self.control_bar.installEventFilter(self)
 
         self.setFocus()
 
@@ -383,6 +387,20 @@ class VideoPlayer(QMainWindow):
     def clear_recent_files(self) -> None:
         self.settings.setValue("recentFiles", [])
 
+    def _cleanup_paths(self, paths: list[str]) -> None:
+        for path in paths:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError:
+                pass
+
+    def _remove_from_recent_files(self, path: str) -> None:
+        recent = self._recent_files()
+        if path in recent:
+            recent.remove(path)
+            self.settings.setValue("recentFiles", recent)
+
     def _cleanup_converted_subtitles(self):
         for path in self.converted_subtitle_paths:
             try:
@@ -434,8 +452,13 @@ class VideoPlayer(QMainWindow):
             self.player.show_text(f"Volume: {new_vol}%", duration=1500)
 
     def skip(self, seconds: int) -> None:
-        if self.has_video() and not self.media_ended:
-            self.player.seek(seconds, reference="relative")
+        if self.has_video():
+            if self.media_ended:
+                if seconds < 0:
+                    self.media_ended = False
+                    self.player.time_pos = max(0, self.last_duration + seconds)
+            else:
+                self.player.seek(seconds, reference="relative")
 
     def adjust_sub_delay(self, delta: float) -> None:
         if not self.has_video():
@@ -518,12 +541,15 @@ class VideoPlayer(QMainWindow):
             return
         if not os.path.isfile(path):
             _ = QMessageBox.warning(self, "File Not Found", "The selected file does not exist.")
+            self._remove_from_recent_files(path)
             return
         if not is_supported_media(path):
             _ = QMessageBox.warning(self, "Unsupported File", "Please select a supported video or audio file.")
             return
 
         self._save_current_position()
+        old_paths = list(self.converted_subtitle_paths)
+        self.converted_subtitle_paths = []
         self.current_media_path = os.path.abspath(path)
         self.media_ended = False
         self.last_time_pos = 0
@@ -545,7 +571,7 @@ class VideoPlayer(QMainWindow):
             self.audio_sub_label.setText("")
             self.audio_sub_label.setVisible(False)
             self.media_stack.setCurrentWidget(self.audio_label)
-            QTimer.singleShot(50, self._reposition_audio_subtitle)
+            QTimer.singleShot(50, self, self._reposition_audio_subtitle)
         else:
             self._audio_subtitle_on = False
             self.audio_sub_label.hide()
@@ -557,8 +583,8 @@ class VideoPlayer(QMainWindow):
             self.player.sub_add(player_sub_path)
 
         # Defer cleanup of old subtitles to let mpv release file locks on them
-        QTimer.singleShot(1000, self._cleanup_converted_subtitles)
-        QTimer.singleShot(500, lambda path=self.current_media_path: self._maybe_resume(path))
+        QTimer.singleShot(1000, self, lambda: self._cleanup_paths(old_paths))
+        QTimer.singleShot(500, self, lambda path=self.current_media_path: self._maybe_resume(path))
 
     def _set_audio_image(self, image_path: str | None) -> None:
         if image_path:
@@ -590,6 +616,31 @@ class VideoPlayer(QMainWindow):
         label_h = min(160, max(48, h // 4))
         self.audio_sub_label.setGeometry(margin, h - label_h - margin, max(1, w - 2 * margin), label_h)
 
+    def mouseDoubleClickEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            child = self.childAt(event.position().toPoint())
+            if child in (self.video_container, self.audio_label, self.media_stack):
+                if self.isFullScreen():
+                    self.showNormal()
+                    self.title_bar.show()
+                    self.control_bar.show()
+                    self.unsetCursor()
+                    self.mouse_timer.stop()
+                else:
+                    self.showFullScreen()
+                    self.handle_mouse_activity()
+                event.accept()
+                return
+        super().mouseDoubleClickEvent(event)
+
+    def wheelEvent(self, event) -> None:
+        delta = event.angleDelta().y()
+        if delta > 0:
+            self.set_volume(self.vol_slider.value() + 5, show_osd=True)
+        elif delta < 0:
+            self.set_volume(self.vol_slider.value() - 5, show_osd=True)
+        event.accept()
+
     def eventFilter(self, obj, event) -> bool:
         if event.type() == QEvent.Type.MouseMove:
             self.handle_mouse_activity()
@@ -604,6 +655,10 @@ class VideoPlayer(QMainWindow):
 
     def _hide_controls_on_timeout(self) -> None:
         if self.isFullScreen():
+            pos = self.mapFromGlobal(self.cursor().pos())
+            if self.control_bar.geometry().contains(pos) or self.title_bar.geometry().contains(pos):
+                self.mouse_timer.start()
+                return
             self.title_bar.hide()
             self.control_bar.hide()
             self.setCursor(Qt.CursorShape.BlankCursor)
@@ -644,7 +699,14 @@ class VideoPlayer(QMainWindow):
         elif key == Qt.Key.Key_BracketRight:
             self.adjust_sub_scale(0.1)
         elif key == Qt.Key.Key_Escape:
-            self.close()
+            if self.isFullScreen():
+                self.showNormal()
+                self.title_bar.show()
+                self.control_bar.show()
+                self.unsetCursor()
+                self.mouse_timer.stop()
+            else:
+                self.close()
         else:
             super().keyPressEvent(event)
 
@@ -656,7 +718,7 @@ class VideoPlayer(QMainWindow):
                 self.title_bar, self.control_bar,
                 self.title_label, self.time_label, self.vol_label
             }
-            if child is None or child in draggable:
+            if not self.isFullScreen() and (child is None or child in draggable):
                 self._drag_pos = event.globalPosition().toPoint()
         super().mousePressEvent(event)
 
