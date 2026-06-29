@@ -127,6 +127,11 @@ def prepare_mpv_library():
             os.environ["PATH"] = meipass + os.pathsep + os.environ["PATH"]
             return
         os.environ["PATH"] = BASE_DIR + os.pathsep + os.environ["PATH"]
+        if hasattr(os, "add_dll_directory"):
+            try:
+                os.add_dll_directory(BASE_DIR)
+            except Exception:
+                pass
         check_and_download_mpv()
         return
 

@@ -4,7 +4,7 @@ import sys
 import importlib
 from typing import Any, cast
 
-from PySide6.QtCore import QSettings, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QOpenGLContext, QPixmap
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import (
@@ -152,6 +152,24 @@ class VideoPlayer(QMainWindow):
         self.timer.timeout.connect(self.update_status)
         self.timer.start()
 
+        # Fullscreen mouse inactivity timer
+        self.mouse_timer = QTimer(self)
+        self.mouse_timer.setInterval(3000)
+        self.mouse_timer.setSingleShot(True)
+        self.mouse_timer.timeout.connect(self._hide_controls_on_timeout)
+
+        # Mouse tracking & Event Filter setup
+        self.setMouseTracking(True)
+        self.central_widget.setMouseTracking(True)
+        self.media_stack.setMouseTracking(True)
+        self.video_container.setMouseTracking(True)
+        self.audio_label.setMouseTracking(True)
+
+        self.central_widget.installEventFilter(self)
+        self.media_stack.installEventFilter(self)
+        self.video_container.installEventFilter(self)
+        self.audio_label.installEventFilter(self)
+
         self.setFocus()
 
     def _build_ui(self):
@@ -280,7 +298,7 @@ class VideoPlayer(QMainWindow):
         self.vol_slider.setValue(DEFAULT_VOLUME)
         self.vol_slider.setCursor(Qt.CursorShape.PointingHandCursor)
         self.vol_slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.vol_slider.valueChanged.connect(self.set_volume)
+        self.vol_slider.valueChanged.connect(lambda val: self.set_volume(val, show_osd=False))
         self.btns_layout.addWidget(self.vol_slider)
 
         self.control_layout.addLayout(self.btns_layout)
@@ -335,6 +353,8 @@ class VideoPlayer(QMainWindow):
         saved = float(str(self.settings.value(self._setting_key_for_path(path), 0) or 0))
         if saved < RESUME_THRESHOLD_SECONDS:
             return
+        was_paused = self.player.pause
+        self.player.pause = True
         answer = QMessageBox.question(
             self,
             "Resume Playback",
@@ -344,6 +364,10 @@ class VideoPlayer(QMainWindow):
         )
         if answer == QMessageBox.StandardButton.Yes:
             self.player.time_pos = saved
+            self.player.pause = False
+            self.media_ended = False
+        else:
+            self.player.pause = was_paused
 
     def _recent_files(self):
         value = self.settings.value("recentFiles", [])
@@ -355,6 +379,9 @@ class VideoPlayer(QMainWindow):
 
     def _remember_recent_file(self, path: str) -> None:
         self.settings.setValue("recentFiles", normalize_recent_files(self._recent_files(), path, RECENT_FILES_LIMIT))
+
+    def clear_recent_files(self) -> None:
+        self.settings.setValue("recentFiles", [])
 
     def _cleanup_converted_subtitles(self):
         for path in self.converted_subtitle_paths:
@@ -396,13 +423,15 @@ class VideoPlayer(QMainWindow):
         if self.has_video():
             self.player.time_pos = position
 
-    def set_volume(self, value: int) -> None:
+    def set_volume(self, value: int, show_osd: bool = False) -> None:
         if not hasattr(self, "player") or not self.player:
             return
         new_vol = max(0, min(100, value))
         self.player.volume = new_vol
         if self.vol_slider.value() != new_vol:
             self.vol_slider.setValue(new_vol)
+        if show_osd:
+            self.player.show_text(f"Volume: {new_vol}%", duration=1500)
 
     def skip(self, seconds: int) -> None:
         if self.has_video() and not self.media_ended:
@@ -412,8 +441,19 @@ class VideoPlayer(QMainWindow):
         if not self.has_video():
             return
         current = getattr(self.player, "sub_delay", 0)
-        self.player.sub_delay = current + delta
+        new_delay = current + delta
+        self.player.sub_delay = new_delay
+        self.player.show_text(f"Subtitle Sync: {new_delay:+.1f}s", duration=1500)
         print(f"Subtitle sync delay: {self.player.sub_delay:.1f}s")
+
+    def adjust_sub_scale(self, delta: float) -> None:
+        if not self.has_video():
+            return
+        current = getattr(self.player, "sub_scale", 1.0)
+        new_scale = max(0.1, min(5.0, current + delta))
+        self.player.sub_scale = new_scale
+        self.player.show_text(f"Subtitle Scale: {new_scale:.1f}x", duration=1500)
+        print(f"Subtitle scale: {new_scale:.1f}x")
 
     def update_status(self):
         try:
@@ -483,7 +523,6 @@ class VideoPlayer(QMainWindow):
             return
 
         self._save_current_position()
-        self._cleanup_converted_subtitles()
         self.current_media_path = os.path.abspath(path)
         self.media_ended = False
         self.last_time_pos = 0
@@ -516,7 +555,9 @@ class VideoPlayer(QMainWindow):
             print(f"Subtitle found and loaded: {player_sub_path}")
             self.player.sub_add(player_sub_path)
 
-        QTimer.singleShot(500, lambda: self._maybe_resume(self.current_media_path))
+        # Defer cleanup of old subtitles to let mpv release file locks on them
+        QTimer.singleShot(1000, self._cleanup_converted_subtitles)
+        QTimer.singleShot(500, lambda path=self.current_media_path: self._maybe_resume(path))
 
     def _set_audio_image(self, image_path: str | None) -> None:
         if image_path:
@@ -548,6 +589,24 @@ class VideoPlayer(QMainWindow):
         label_h = min(160, max(48, h // 4))
         self.audio_sub_label.setGeometry(margin, h - label_h - margin, max(1, w - 2 * margin), label_h)
 
+    def eventFilter(self, obj, event) -> bool:
+        if event.type() == QEvent.Type.MouseMove:
+            self.handle_mouse_activity()
+        return super().eventFilter(obj, event)
+
+    def handle_mouse_activity(self) -> None:
+        if self.isFullScreen():
+            self.unsetCursor()
+            self.title_bar.show()
+            self.control_bar.show()
+            self.mouse_timer.start()
+
+    def _hide_controls_on_timeout(self) -> None:
+        if self.isFullScreen():
+            self.title_bar.hide()
+            self.control_bar.hide()
+            self.setCursor(Qt.CursorShape.BlankCursor)
+
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._update_audio_label()
@@ -562,22 +621,27 @@ class VideoPlayer(QMainWindow):
         elif key == Qt.Key.Key_Right:
             self.skip(5)
         elif key == Qt.Key.Key_Up:
-            self.set_volume(self.vol_slider.value() + 5)
+            self.set_volume(self.vol_slider.value() + 5, show_osd=True)
         elif key == Qt.Key.Key_Down:
-            self.set_volume(self.vol_slider.value() - 5)
+            self.set_volume(self.vol_slider.value() - 5, show_osd=True)
         elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             if self.isFullScreen():
                 self.showNormal()
                 self.title_bar.show()
                 self.control_bar.show()
+                self.unsetCursor()
+                self.mouse_timer.stop()
             else:
                 self.showFullScreen()
-                self.title_bar.hide()
-                self.control_bar.hide()
+                self.handle_mouse_activity()
         elif key == Qt.Key.Key_Z:
             self.adjust_sub_delay(0.1)
         elif key == Qt.Key.Key_X:
             self.adjust_sub_delay(-0.1)
+        elif key == Qt.Key.Key_BracketLeft:
+            self.adjust_sub_scale(-0.1)
+        elif key == Qt.Key.Key_BracketRight:
+            self.adjust_sub_scale(0.1)
         elif key == Qt.Key.Key_Escape:
             self.close()
         else:
@@ -586,7 +650,11 @@ class VideoPlayer(QMainWindow):
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             child = self.childAt(event.position().toPoint())
-            draggable = {self.video_container, self.audio_label, self.media_stack, self.title_bar, self.control_bar}
+            draggable = {
+                self.video_container, self.audio_label, self.media_stack, 
+                self.title_bar, self.control_bar,
+                self.title_label, self.time_label, self.vol_label
+            }
             if child is None or child in draggable:
                 self._drag_pos = event.globalPosition().toPoint()
         super().mousePressEvent(event)
@@ -644,6 +712,10 @@ class VideoPlayer(QMainWindow):
                 action.setToolTip(path)
                 action.triggered.connect(lambda checked=False, p=path: self.load_video(p))
                 recent_menu.addAction(action)
+            recent_menu.addSeparator()
+            clear_action = QAction("Clear Recent Files", self)
+            clear_action.triggered.connect(self.clear_recent_files)
+            recent_menu.addAction(clear_action)
 
         menu.addSeparator()
 

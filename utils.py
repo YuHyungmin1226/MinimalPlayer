@@ -103,6 +103,28 @@ def _format_srt_timestamp(milliseconds: int) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 
+def _filter_smi_by_lang(smi_part: str) -> str:
+    # 1. Prioritize Korean subtitle classes (KRCC, KORCC)
+    kr_match = re.search(r"(?i)<P\s+Class\s*=\s*(KRCC|KORCC)\s*>", smi_part)
+    if kr_match:
+        start_idx = kr_match.end()
+        next_p = re.search(r"(?i)<P\s+Class\s*=", smi_part[start_idx:])
+        if next_p:
+            return smi_part[start_idx : start_idx + next_p.start()]
+        return smi_part[start_idx:]
+
+    # 2. Fallback to the first class if Korean isn't found
+    any_p = re.search(r"(?i)<P\s+Class\s*=\s*([a-zA-Z0-9_-]+)\s*>", smi_part)
+    if any_p:
+        start_idx = any_p.end()
+        next_p = re.search(r"(?i)<P\s+Class\s*=", smi_part[start_idx:])
+        if next_p:
+            return smi_part[start_idx : start_idx + next_p.start()]
+        return smi_part[start_idx:]
+
+    return smi_part
+
+
 def _clean_smi_text(text: str) -> str:
     text = re.sub(r"(?i)<br\s*/?>", "\n", text)
     text = re.sub(r"\{\\[^}]+\}", "", text)
@@ -120,7 +142,8 @@ def convert_smi_to_srt_text(smi_text: str) -> str:
         start = starts[index]
         body_start = match.end()
         body_end = matches[index + 1].start() if index + 1 < len(matches) else len(smi_text)
-        text = _clean_smi_text(smi_text[body_start:body_end])
+        body_part = _filter_smi_by_lang(smi_text[body_start:body_end])
+        text = _clean_smi_text(body_part)
         if not text:
             continue
         later_starts = [candidate for candidate in starts[index + 1:] if candidate > start]

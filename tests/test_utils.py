@@ -100,6 +100,35 @@ class UtilsTest(unittest.TestCase):
         self.assertIn("00:00:09,660 --> 00:00:12,660", srt)
         self.assertIn("당신\n강렬해", srt)
 
+    def test_convert_multilingual_smi_prioritises_korean(self):
+        smi = (
+            "<SAMI><BODY>\n"
+            "<SYNC Start=1000>\n"
+            "  <P Class=KRCC>안녕하세요\n"
+            "  <P Class=ENCC>Hello\n"
+            "<SYNC Start=4000>\n"
+            "  <P Class=ENCC>Bye\n"
+            "  <P Class=KRCC>안녕히 가세요\n"
+            "</BODY></SAMI>"
+        )
+        srt = convert_smi_to_srt_text(smi)
+        self.assertIn("안녕하세요", srt)
+        self.assertNotIn("Hello", srt)
+        self.assertIn("안녕히 가세요", srt)
+        self.assertNotIn("Bye", srt)
+
+    def test_convert_multilingual_smi_falls_back_to_first_class(self):
+        smi = (
+            "<SAMI><BODY>\n"
+            "<SYNC Start=1000>\n"
+            "  <P Class=ENCC>Hello\n"
+            "  <P Class=JPCC>Konnichiwa\n"
+            "</BODY></SAMI>"
+        )
+        srt = convert_smi_to_srt_text(smi)
+        self.assertIn("Hello", srt)
+        self.assertNotIn("Konnichiwa", srt)
+
 
 if __name__ == "__main__":
     unittest.main()
