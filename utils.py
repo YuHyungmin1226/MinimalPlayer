@@ -4,7 +4,7 @@ import tempfile
 from html import unescape
 from collections.abc import Iterable
 
-from constants import AUDIO_EXTENSIONS, MEDIA_EXTENSIONS, SUBTITLE_EXTENSIONS, VIDEO_EXTENSIONS
+from constants import AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, MEDIA_EXTENSIONS, SUBTITLE_EXTENSIONS, VIDEO_EXTENSIONS
 
 
 def format_time(seconds: float | int | None) -> str:
@@ -48,6 +48,38 @@ def find_matching_subtitle(video_path: str) -> str | None:
     for ext in SUBTITLE_EXTENSIONS:
         if ext in matches:
             return matches[ext]
+    return None
+
+
+def find_matching_image(media_path: str) -> str | None:
+    """오디오 파일과 같은 폴더에서 커버아트 이미지를 탐색합니다.
+
+    우선순위: 동일 파일명 → cover → folder → album → front → artwork
+    """
+    dir_name, file_name = os.path.split(media_path)
+    if not dir_name:
+        dir_name = "."
+    base_name, _ = os.path.splitext(file_name)
+
+    COVER_NAMES = [base_name.lower(), "cover", "folder", "album", "front", "artwork"]
+
+    found: dict[str, str] = {}  # name_lower → path
+    try:
+        with os.scandir(dir_name) as entries:
+            for entry in entries:
+                if not entry.is_file():
+                    continue
+                entry_base, entry_ext = os.path.splitext(entry.name)
+                if entry_ext.lower() in IMAGE_EXTENSIONS:
+                    key = entry_base.lower()
+                    if key in COVER_NAMES and key not in found:
+                        found[key] = entry.path
+    except Exception:
+        pass
+
+    for name in COVER_NAMES:
+        if name in found:
+            return found[name]
     return None
 
 

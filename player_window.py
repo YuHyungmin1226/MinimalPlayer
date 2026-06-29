@@ -5,7 +5,7 @@ import importlib
 from typing import Any, cast
 
 from PySide6.QtCore import QSettings, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QOpenGLContext
+from PySide6.QtGui import QAction, QOpenGLContext, QPixmap
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -32,7 +32,7 @@ from constants import (
 )
 from file_association import register_file_associations
 from mpv_setup import IS_LINUX, IS_MAC, IS_WINDOWS
-from utils import convert_smi_file_to_temp_srt, convert_subtitle_to_utf8, find_matching_subtitle, format_time, is_supported_audio, is_supported_media, normalize_recent_files
+from utils import convert_smi_file_to_temp_srt, convert_subtitle_to_utf8, find_matching_image, find_matching_subtitle, format_time, is_supported_audio, is_supported_media, normalize_recent_files
 
 mpv = cast(Any, importlib.import_module("mpv"))
 
@@ -137,6 +137,7 @@ class VideoPlayer(QMainWindow):
         self.last_duration = 0
         self.converted_subtitle_paths = []
         self._drag_pos = None
+        self._audio_pixmap: QPixmap | None = None
 
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.resize(1000, 600)
@@ -475,18 +476,58 @@ class VideoPlayer(QMainWindow):
         self.title_label.setText(os.path.basename(self.current_media_path))
         self._remember_recent_file(self.current_media_path)
 
+        sub_path = find_matching_subtitle(self.current_media_path)
+
         if is_supported_audio(self.current_media_path):
-            self.media_stack.setCurrentWidget(self.audio_label)
+            if sub_path:
+                # 자막이 있으면 mpv 렌더 영역(video_container)에서 자막을 표시
+                self._clear_audio_image()
+                self.media_stack.setCurrentWidget(self.video_container)
+            else:
+                image_path = find_matching_image(self.current_media_path)
+                if image_path:
+                    self._set_audio_image(image_path)
+                else:
+                    self._clear_audio_image()
+                self.media_stack.setCurrentWidget(self.audio_label)
         else:
+            self._clear_audio_image()
             self.media_stack.setCurrentWidget(self.video_container)
 
-        sub_path = find_matching_subtitle(self.current_media_path)
         if sub_path:
             player_sub_path = self._subtitle_path_for_player(sub_path)
             print(f"Subtitle found and loaded: {player_sub_path}")
             self.player.sub_add(player_sub_path)
 
         QTimer.singleShot(500, lambda: self._maybe_resume(self.current_media_path))
+
+    def _set_audio_image(self, image_path: str) -> None:
+        pixmap = QPixmap(image_path)
+        if pixmap.isNull():
+            self._clear_audio_image()
+            return
+        self._audio_pixmap = pixmap
+        self._update_audio_label()
+
+    def _clear_audio_image(self) -> None:
+        self._audio_pixmap = None
+        self.audio_label.clear()
+        self.audio_label.setText("♪")
+
+    def _update_audio_label(self) -> None:
+        if self._audio_pixmap and not self._audio_pixmap.isNull():
+            size = self.audio_label.size()
+            if size.width() > 0 and size.height() > 0:
+                scaled = self._audio_pixmap.scaled(
+                    size,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                self.audio_label.setPixmap(scaled)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_audio_label()
 
     def keyPressEvent(self, event):
         key = event.key()

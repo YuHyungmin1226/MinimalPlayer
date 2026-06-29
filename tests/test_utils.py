@@ -2,7 +2,7 @@ import os
 import tempfile
 import unittest
 
-from utils import convert_smi_to_srt_text, find_matching_subtitle, format_time, is_supported_audio, is_supported_media, is_supported_video, normalize_recent_files
+from utils import convert_smi_to_srt_text, find_matching_image, find_matching_subtitle, format_time, is_supported_audio, is_supported_media, is_supported_video, normalize_recent_files
 
 
 class UtilsTest(unittest.TestCase):
@@ -59,6 +59,38 @@ class UtilsTest(unittest.TestCase):
                 open(f, "w", encoding="utf-8").close()
             # SUBTITLE_EXTENSIONS 순서(.srt 우선)대로 반환해야 함
             self.assertEqual(find_matching_subtitle(video), srt)
+
+    def test_find_matching_image_same_basename(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio = os.path.join(temp_dir, "song.mp3")
+            image = os.path.join(temp_dir, "song.jpg")
+            open(audio, "w", encoding="utf-8").close()
+            open(image, "w", encoding="utf-8").close()
+            self.assertEqual(find_matching_image(audio), image)
+
+    def test_find_matching_image_cover_fallback(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio = os.path.join(temp_dir, "track.mp3")
+            cover = os.path.join(temp_dir, "cover.jpg")
+            open(audio, "w", encoding="utf-8").close()
+            open(cover, "w", encoding="utf-8").close()
+            self.assertEqual(find_matching_image(audio), cover)
+
+    def test_find_matching_image_same_basename_over_cover(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio = os.path.join(temp_dir, "track.mp3")
+            same = os.path.join(temp_dir, "track.png")
+            cover = os.path.join(temp_dir, "cover.jpg")
+            for f in (audio, same, cover):
+                open(f, "w", encoding="utf-8").close()
+            # 동일 파일명이 cover보다 우선
+            self.assertEqual(find_matching_image(audio), same)
+
+    def test_find_matching_image_returns_none_when_no_image(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio = os.path.join(temp_dir, "track.mp3")
+            open(audio, "w", encoding="utf-8").close()
+            self.assertIsNone(find_matching_image(audio))
 
     def test_convert_malformed_smi_to_srt_text(self):
         smi = "<SAMI><BODY><SYNC Start=8100>히사짱...<SYNC Start=9130>&nbsp;<SYNC Start=9660>당신<br>강렬해</BODY></SAMI>"
