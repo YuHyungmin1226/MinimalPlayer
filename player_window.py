@@ -31,7 +31,7 @@ from constants import (
 )
 from file_association import register_file_associations
 from mpv_setup import IS_LINUX, IS_MAC, IS_WINDOWS
-from utils import convert_smi_file_to_temp_srt, convert_subtitle_to_utf8, find_matching_subtitle, format_time, is_supported_video, normalize_recent_files
+from utils import convert_smi_file_to_temp_srt, convert_subtitle_to_utf8, find_matching_subtitle, format_time, is_supported_audio, is_supported_media, normalize_recent_files
 
 mpv = cast(Any, importlib.import_module("mpv"))
 
@@ -428,9 +428,13 @@ class VideoPlayer(QMainWindow):
     def open_file_dialog(self):
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "Select Video File",
+            "Select Media File",
             "",
-            "Video Files (*.mp4 *.mkv *.avi *.mov *.wmv *.flv *.webm *.3gp *.mpeg *.mpg *.ts *.tp *.asf *.m4v);;All Files (*)",
+            "Media Files (*.mp4 *.mkv *.avi *.mov *.wmv *.flv *.webm *.3gp *.mpeg *.mpg *.ts *.tp *.asf *.m4v "
+            "*.wav *.mp3 *.flac *.aac *.ogg *.m4a *.opus *.wma *.aiff *.aif *.ape *.alac);;"
+            "Video Files (*.mp4 *.mkv *.avi *.mov *.wmv *.flv *.webm *.3gp *.mpeg *.mpg *.ts *.tp *.asf *.m4v);;"
+            "Audio Files (*.wav *.mp3 *.flac *.aac *.ogg *.m4a *.opus *.wma *.aiff *.aif *.ape *.alac);;"
+            "All Files (*)",
         )
         if file_path:
             self.load_video(file_path)
@@ -441,8 +445,8 @@ class VideoPlayer(QMainWindow):
         if not os.path.isfile(path):
             _ = QMessageBox.warning(self, "File Not Found", "The selected file does not exist.")
             return
-        if not is_supported_video(path):
-            _ = QMessageBox.warning(self, "Unsupported File", "Please select a supported video file.")
+        if not is_supported_media(path):
+            _ = QMessageBox.warning(self, "Unsupported File", "Please select a supported video or audio file.")
             return
 
         self._save_current_position()
@@ -454,6 +458,11 @@ class VideoPlayer(QMainWindow):
         self.player.play(self.current_media_path)
         self.title_label.setText(os.path.basename(self.current_media_path))
         self._remember_recent_file(self.current_media_path)
+
+        if is_supported_audio(self.current_media_path):
+            self.video_container.setVisible(False)
+        else:
+            self.video_container.setVisible(True)
 
         sub_path = find_matching_subtitle(self.current_media_path)
         if sub_path:
@@ -528,7 +537,7 @@ class VideoPlayer(QMainWindow):
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             files = [u.toLocalFile() for u in event.mimeData().urls()]
-            if files and is_supported_video(files[0]):
+            if files and is_supported_media(files[0]):
                 event.acceptProposedAction()
             else:
                 event.ignore()

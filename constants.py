@@ -13,6 +13,13 @@ VIDEO_EXTENSIONS = {
     ".3gp", ".mpeg", ".mpg", ".ts", ".tp", ".asf", ".m4v",
 }
 
+AUDIO_EXTENSIONS = {
+    ".wav", ".mp3", ".flac", ".aac", ".ogg", ".m4a", ".opus",
+    ".wma", ".aiff", ".aif", ".ape", ".alac",
+}
+
+MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
+
 SUBTITLE_EXTENSIONS = [".srt", ".ass", ".vtt", ".smi"]
 RECENT_FILES_LIMIT = 5
 RESUME_THRESHOLD_SECONDS = 10

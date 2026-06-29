@@ -4,7 +4,7 @@ import tempfile
 from html import unescape
 from collections.abc import Iterable
 
-from constants import SUBTITLE_EXTENSIONS, VIDEO_EXTENSIONS
+from constants import AUDIO_EXTENSIONS, MEDIA_EXTENSIONS, SUBTITLE_EXTENSIONS, VIDEO_EXTENSIONS
 
 
 def format_time(seconds: float | int | None) -> str:
@@ -16,6 +16,14 @@ def format_time(seconds: float | int | None) -> str:
 
 def is_supported_video(path: str) -> bool:
     return os.path.splitext(path)[1].lower() in VIDEO_EXTENSIONS
+
+
+def is_supported_audio(path: str) -> bool:
+    return os.path.splitext(path)[1].lower() in AUDIO_EXTENSIONS
+
+
+def is_supported_media(path: str) -> bool:
+    return os.path.splitext(path)[1].lower() in MEDIA_EXTENSIONS
 
 
 def find_matching_subtitle(video_path: str) -> str | None:

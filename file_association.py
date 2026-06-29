@@ -1,7 +1,7 @@
 import os
 import sys
 
-from constants import APP_DISPLAY_NAME, APP_NAME, VIDEO_EXTENSIONS
+from constants import APP_DISPLAY_NAME, APP_NAME, MEDIA_EXTENSIONS
 
 
 def register_file_associations(silent=False):
@@ -36,13 +36,13 @@ def register_file_associations(silent=False):
             winreg.SetValueEx(key, "ApplicationDescription", 0, winreg.REG_SZ, "Lightweight Minimal Video Player")
 
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, rf"{capabilities_path}\FileAssociations") as key:
-            for ext in sorted(VIDEO_EXTENSIONS):
+            for ext in sorted(MEDIA_EXTENSIONS):
                 winreg.SetValueEx(key, ext, 0, winreg.REG_SZ, APP_NAME)
 
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\RegisteredApplications") as key:
             winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, capabilities_path)
 
-        for ext in sorted(VIDEO_EXTENSIONS):
+        for ext in sorted(MEDIA_EXTENSIONS):
             assoc_path = rf"Software\Classes\{ext}\OpenWithProgids"
             with winreg.CreateKey(winreg.HKEY_CURRENT_USER, assoc_path) as key:
                 winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_NONE, b"")
