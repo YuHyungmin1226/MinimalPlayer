@@ -5,7 +5,7 @@ import importlib
 from typing import Any, cast
 
 from PySide6.QtCore import QSettings, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QOpenGLContext, QPixmap
+from PySide6.QtGui import QAction, QOpenGLContext
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -137,7 +137,7 @@ class VideoPlayer(QMainWindow):
         self.last_duration = 0
         self.converted_subtitle_paths = []
         self._drag_pos = None
-        self._audio_pixmap: QPixmap | None = None
+        self._want_cover_art = False
 
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.resize(1000, 600)
@@ -278,7 +278,7 @@ class VideoPlayer(QMainWindow):
         locale.setlocale(locale.LC_NUMERIC, "C")
         try:
             if IS_MAC:
-                self.player = mpv.MPV(vo="libmpv", ytdl=True, osc=False, keep_open=True)
+                self.player = mpv.MPV(vo="libmpv", ytdl=True, osc=False, keep_open=True, force_window="yes")
                 if isinstance(self.video_container, MpvGLWidget):
                     self.video_container.set_player(self.player)
             else:
@@ -289,6 +289,7 @@ class VideoPlayer(QMainWindow):
                     input_vo_keyboard=False,
                     osc=False,
                     keep_open=True,
+                    force_window="yes",
                 )
             self.player.volume = self.vol_slider.value()
         except Exception as e:
@@ -407,6 +408,8 @@ class VideoPlayer(QMainWindow):
         try:
             if not self.player:
                 return
+            if self._want_cover_art:
+                self._select_cover_art_track()
             play_text = "Play"
             time_pos = self.player.time_pos
             duration = self.player.duration
@@ -472,26 +475,28 @@ class VideoPlayer(QMainWindow):
         self.media_ended = False
         self.last_time_pos = 0
         self.last_duration = 0
+
+        sub_path = find_matching_subtitle(self.current_media_path)
+        is_audio = is_supported_audio(self.current_media_path)
+        image_path = find_matching_image(self.current_media_path) if is_audio else None
+
+        # 오디오 + 동일 파일명 이미지: mpv cover-art 트랙으로 등록.
+        # play() 이전에 설정해야 트랙으로 인식되며, 자막 오버레이와 동시 표시 가능.
+        try:
+            self.player["cover-art-files"] = [image_path] if image_path else []
+        except Exception:
+            pass
+        self._want_cover_art = bool(image_path)
+
         self.player.play(self.current_media_path)
         self.title_label.setText(os.path.basename(self.current_media_path))
         self._remember_recent_file(self.current_media_path)
 
-        sub_path = find_matching_subtitle(self.current_media_path)
-
-        if is_supported_audio(self.current_media_path):
-            if sub_path:
-                # 자막이 있으면 mpv 렌더 영역(video_container)에서 자막을 표시
-                self._clear_audio_image()
-                self.media_stack.setCurrentWidget(self.video_container)
-            else:
-                image_path = find_matching_image(self.current_media_path)
-                if image_path:
-                    self._set_audio_image(image_path)
-                else:
-                    self._clear_audio_image()
-                self.media_stack.setCurrentWidget(self.audio_label)
+        # 오디오라도 자막이나 커버 이미지가 있으면 mpv 렌더 영역을 사용해 출력한다.
+        if is_audio and not sub_path and not image_path:
+            self.audio_label.setText("♪")
+            self.media_stack.setCurrentWidget(self.audio_label)
         else:
-            self._clear_audio_image()
             self.media_stack.setCurrentWidget(self.video_container)
 
         if sub_path:
@@ -501,33 +506,18 @@ class VideoPlayer(QMainWindow):
 
         QTimer.singleShot(500, lambda: self._maybe_resume(self.current_media_path))
 
-    def _set_audio_image(self, image_path: str) -> None:
-        pixmap = QPixmap(image_path)
-        if pixmap.isNull():
-            self._clear_audio_image()
+    def _select_cover_art_track(self):
+        """오디오의 cover-art video 트랙은 자동 선택되지 않으므로 수동 선택한다."""
+        if not self._want_cover_art:
             return
-        self._audio_pixmap = pixmap
-        self._update_audio_label()
-
-    def _clear_audio_image(self) -> None:
-        self._audio_pixmap = None
-        self.audio_label.clear()
-        self.audio_label.setText("♪")
-
-    def _update_audio_label(self) -> None:
-        if self._audio_pixmap and not self._audio_pixmap.isNull():
-            size = self.audio_label.size()
-            if size.width() > 0 and size.height() > 0:
-                scaled = self._audio_pixmap.scaled(
-                    size,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-                self.audio_label.setPixmap(scaled)
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._update_audio_label()
+        if self.player.vid:  # 이미 선택됨 (False/None/0이 아니면 완료)
+            self._want_cover_art = False
+            return
+        for track in (self.player.track_list or []):
+            if track.get("type") == "video" and track.get("albumart"):
+                self.player.vid = track["id"]
+                self._want_cover_art = False
+                break
 
     def keyPressEvent(self, event):
         key = event.key()
