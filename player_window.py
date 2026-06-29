@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSlider,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -184,13 +185,28 @@ class VideoPlayer(QMainWindow):
         self.title_bar_layout.addWidget(self.close_btn)
         self.main_layout.addWidget(self.title_bar)
 
+        # QStackedWidget으로 비디오/오디오 뷰를 전환 (layout 붕괴 방지)
+        self.media_stack = QStackedWidget()
+        self.media_stack.setObjectName("VideoContainer")
+
         if IS_MAC:
             self.video_container = MpvGLWidget()
         else:
             self.video_container = QWidget()
+
+        # 오디오 모드 표시 레이블
+        self.audio_label = QLabel("♪")
+        self.audio_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.audio_label.setStyleSheet("QLabel { background-color: #000; color: #444; font-size: 80px; }")
+
+        self.media_stack.addWidget(self.video_container)  # index 0: 비디오
+        self.media_stack.addWidget(self.audio_label)       # index 1: 오디오
+
+        # WA_NativeWindow는 위젯이 부모 트리에 추가된 후 설정
+        if not IS_MAC:
             self.video_container.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
-        self.video_container.setObjectName("VideoContainer")
-        self.main_layout.addWidget(self.video_container, 1)
+
+        self.main_layout.addWidget(self.media_stack, 1)
 
         self.control_bar = QFrame()
         self.control_bar.setObjectName("ControlBar")
@@ -460,9 +476,9 @@ class VideoPlayer(QMainWindow):
         self._remember_recent_file(self.current_media_path)
 
         if is_supported_audio(self.current_media_path):
-            self.video_container.setVisible(False)
+            self.media_stack.setCurrentWidget(self.audio_label)
         else:
-            self.video_container.setVisible(True)
+            self.media_stack.setCurrentWidget(self.video_container)
 
         sub_path = find_matching_subtitle(self.current_media_path)
         if sub_path:
@@ -481,9 +497,9 @@ class VideoPlayer(QMainWindow):
         elif key == Qt.Key.Key_Right:
             self.skip(5)
         elif key == Qt.Key.Key_Up:
-            self.set_volume(self.player.volume + 5)
+            self.set_volume(self.vol_slider.value() + 5)
         elif key == Qt.Key.Key_Down:
-            self.set_volume(self.player.volume - 5)
+            self.set_volume(self.vol_slider.value() - 5)
         elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             if self.isFullScreen():
                 self.showNormal()
@@ -505,7 +521,8 @@ class VideoPlayer(QMainWindow):
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             child = self.childAt(event.position().toPoint())
-            if child is None or child in [self.video_container, self.title_bar, self.control_bar]:
+            draggable = {self.video_container, self.audio_label, self.media_stack, self.title_bar, self.control_bar}
+            if child is None or child in draggable:
                 self._drag_pos = event.globalPosition().toPoint()
         super().mousePressEvent(event)
 

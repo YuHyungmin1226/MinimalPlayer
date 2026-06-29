@@ -32,16 +32,22 @@ def find_matching_subtitle(video_path: str) -> str | None:
         dir_name = "."
     base_name, _ = os.path.splitext(file_name)
     base_name_lower = base_name.lower()
-    
+
+    # ext → path 매핑 수집 후 SUBTITLE_EXTENSIONS 순서대로 우선 반환 (비결정적 scandir 순서 방지)
+    matches: dict[str, str] = {}
     try:
         with os.scandir(dir_name) as entries:
             for entry in entries:
                 if entry.is_file():
                     entry_base, entry_ext = os.path.splitext(entry.name)
                     if entry_base.lower() == base_name_lower and entry_ext.lower() in SUBTITLE_EXTENSIONS:
-                        return entry.path
+                        matches[entry_ext.lower()] = entry.path
     except Exception:
         pass
+
+    for ext in SUBTITLE_EXTENSIONS:
+        if ext in matches:
+            return matches[ext]
     return None
 
 
