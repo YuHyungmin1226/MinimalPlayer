@@ -5,7 +5,7 @@ import importlib
 from typing import Any, cast
 
 from PySide6.QtCore import QSettings, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QOpenGLContext
+from PySide6.QtGui import QAction, QOpenGLContext, QPixmap
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -137,7 +137,8 @@ class VideoPlayer(QMainWindow):
         self.last_duration = 0
         self.converted_subtitle_paths = []
         self._drag_pos = None
-        self._want_cover_art = False
+        self._audio_pixmap: QPixmap | None = None
+        self._audio_subtitle_on = False
 
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.resize(1000, 600)
@@ -195,10 +196,21 @@ class VideoPlayer(QMainWindow):
         else:
             self.video_container = QWidget()
 
-        # 오디오 모드 표시 레이블
+        # 오디오 모드 표시 레이블 (커버 이미지 또는 ♪). Qt가 직접 그리므로
+        # 창이 가려졌다 나타나도 항상 다시 그려진다(mpv 정지프레임 미재draw 회피).
         self.audio_label = QLabel("♪")
         self.audio_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.audio_label.setStyleSheet("QLabel { background-color: #000; color: #444; font-size: 80px; }")
+
+        # 오디오 모드 자막 오버레이 (mpv의 sub_text를 읽어 표시)
+        self.audio_sub_label = QLabel("", self.audio_label)
+        self.audio_sub_label.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
+        self.audio_sub_label.setWordWrap(True)
+        self.audio_sub_label.setStyleSheet(
+            "QLabel { background-color: rgba(0, 0, 0, 140); color: #fff; font-size: 22px; "
+            "font-weight: bold; padding: 6px; }"
+        )
+        self.audio_sub_label.hide()
 
         self.media_stack.addWidget(self.video_container)  # index 0: 비디오
         self.media_stack.addWidget(self.audio_label)       # index 1: 오디오
@@ -278,7 +290,7 @@ class VideoPlayer(QMainWindow):
         locale.setlocale(locale.LC_NUMERIC, "C")
         try:
             if IS_MAC:
-                self.player = mpv.MPV(vo="libmpv", ytdl=True, osc=False, keep_open=True, force_window="yes")
+                self.player = mpv.MPV(vo="libmpv", ytdl=True, osc=False, keep_open=True)
                 if isinstance(self.video_container, MpvGLWidget):
                     self.video_container.set_player(self.player)
             else:
@@ -289,7 +301,6 @@ class VideoPlayer(QMainWindow):
                     input_vo_keyboard=False,
                     osc=False,
                     keep_open=True,
-                    force_window="yes",
                 )
             self.player.volume = self.vol_slider.value()
         except Exception as e:
@@ -408,8 +419,10 @@ class VideoPlayer(QMainWindow):
         try:
             if not self.player:
                 return
-            if self._want_cover_art:
-                self._select_cover_art_track()
+            if self._audio_subtitle_on:
+                text = self.player.sub_text or ""
+                if self.audio_sub_label.text() != text:
+                    self.audio_sub_label.setText(text)
             play_text = "Play"
             time_pos = self.player.time_pos
             duration = self.player.duration
@@ -480,23 +493,22 @@ class VideoPlayer(QMainWindow):
         is_audio = is_supported_audio(self.current_media_path)
         image_path = find_matching_image(self.current_media_path) if is_audio else None
 
-        # 오디오 + 동일 파일명 이미지: mpv cover-art 트랙으로 등록.
-        # play() 이전에 설정해야 트랙으로 인식되며, 자막 오버레이와 동시 표시 가능.
-        try:
-            self.player["cover-art-files"] = [image_path] if image_path else []
-        except Exception:
-            pass
-        self._want_cover_art = bool(image_path)
-
         self.player.play(self.current_media_path)
         self.title_label.setText(os.path.basename(self.current_media_path))
         self._remember_recent_file(self.current_media_path)
 
-        # 오디오라도 자막이나 커버 이미지가 있으면 mpv 렌더 영역을 사용해 출력한다.
-        if is_audio and not sub_path and not image_path:
-            self.audio_label.setText("♪")
+        if is_audio:
+            # 오디오는 Qt 레이블에 커버 이미지(또는 ♪)를 그리고, 자막은 sub_text를
+            # Qt 오버레이로 표시한다. mpv 영상 출력에 의존하지 않아 항상 안정적으로 보인다.
+            self._set_audio_image(image_path)
+            self._audio_subtitle_on = bool(sub_path)
+            self.audio_sub_label.setText("")
+            self.audio_sub_label.setVisible(bool(sub_path))
+            self._reposition_audio_subtitle()
             self.media_stack.setCurrentWidget(self.audio_label)
         else:
+            self._audio_subtitle_on = False
+            self.audio_sub_label.hide()
             self.media_stack.setCurrentWidget(self.video_container)
 
         if sub_path:
@@ -506,18 +518,40 @@ class VideoPlayer(QMainWindow):
 
         QTimer.singleShot(500, lambda: self._maybe_resume(self.current_media_path))
 
-    def _select_cover_art_track(self):
-        """오디오의 cover-art video 트랙은 자동 선택되지 않으므로 수동 선택한다."""
-        if not self._want_cover_art:
-            return
-        if self.player.vid:  # 이미 선택됨 (False/None/0이 아니면 완료)
-            self._want_cover_art = False
-            return
-        for track in (self.player.track_list or []):
-            if track.get("type") == "video" and track.get("albumart"):
-                self.player.vid = track["id"]
-                self._want_cover_art = False
-                break
+    def _set_audio_image(self, image_path: str | None) -> None:
+        if image_path:
+            pixmap = QPixmap(image_path)
+            if not pixmap.isNull():
+                self._audio_pixmap = pixmap
+                self._update_audio_label()
+                return
+        self._audio_pixmap = None
+        self.audio_label.clear()
+        self.audio_label.setText("♪")
+
+    def _update_audio_label(self) -> None:
+        if self._audio_pixmap and not self._audio_pixmap.isNull():
+            size = self.audio_label.size()
+            if size.width() > 0 and size.height() > 0:
+                self.audio_label.setPixmap(
+                    self._audio_pixmap.scaled(
+                        size,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+
+    def _reposition_audio_subtitle(self) -> None:
+        margin = 24
+        w = self.audio_label.width()
+        h = self.audio_label.height()
+        label_h = min(160, max(48, h // 4))
+        self.audio_sub_label.setGeometry(margin, h - label_h - margin, max(1, w - 2 * margin), label_h)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_audio_label()
+        self._reposition_audio_subtitle()
 
     def keyPressEvent(self, event):
         key = event.key()
