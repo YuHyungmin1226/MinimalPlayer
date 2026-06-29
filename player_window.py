@@ -544,8 +544,8 @@ class VideoPlayer(QMainWindow):
             self._audio_subtitle_on = bool(sub_path)
             self.audio_sub_label.setText("")
             self.audio_sub_label.setVisible(False)
-            self._reposition_audio_subtitle()
             self.media_stack.setCurrentWidget(self.audio_label)
+            QTimer.singleShot(50, self._reposition_audio_subtitle)
         else:
             self._audio_subtitle_on = False
             self.audio_sub_label.hide()
