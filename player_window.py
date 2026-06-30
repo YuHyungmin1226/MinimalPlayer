@@ -75,7 +75,9 @@ class MpvGLWidget(QOpenGLWidget):
 
     def paintGL(self):
         if self._ctx is None:
-            return
+            self.initializeGL()
+            if self._ctx is None:
+                return
         ratio = self.devicePixelRatioF()
         width = max(1, int(round(self.width() * ratio)))
         height = max(1, int(round(self.height() * ratio)))
@@ -240,9 +242,6 @@ class VideoPlayer(QMainWindow):
 
         self.media_stack.addWidget(self.audio_label)
 
-        if not IS_MAC:
-            self.video_container.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
-
         self.main_layout.addWidget(self.media_stack, 1)
 
         self.control_bar = QFrame()
@@ -313,18 +312,8 @@ class VideoPlayer(QMainWindow):
     def _init_player(self):
         locale.setlocale(locale.LC_NUMERIC, "C")
         try:
-            if IS_MAC:
-                self.player = mpv.MPV(vo="libmpv", ytdl=True, osc=False, keep_open=True)
-                self.video_container.set_player(self.player)
-            else:
-                self.player = mpv.MPV(
-                    wid=str(int(self.video_container.winId())),
-                    ytdl=True,
-                    input_default_bindings=False,
-                    input_vo_keyboard=False,
-                    osc=False,
-                    keep_open=True,
-                )
+            self.player = mpv.MPV(vo="libmpv", ytdl=True, osc=False, keep_open=True)
+            self.video_container.set_player(self.player)
             self.player.volume = self.vol_slider.value()
         except Exception as e:
             if IS_MAC:
