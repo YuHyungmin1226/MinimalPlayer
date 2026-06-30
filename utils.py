@@ -159,8 +159,9 @@ def convert_smi_to_srt_text(smi_text: str) -> str:
 
 def _read_and_decode_subtitle(path: str) -> str:
     """Read a subtitle file and decode with CJK encoding fallback."""
-    raw = open(path, "rb").read()
-    for encoding in ("utf-8-sig", "cp949", "euc-kr"):
+    with open(path, "rb") as f:
+        raw = f.read()
+    for encoding in ("utf-8-sig", "utf-16", "cp949", "euc-kr"):
         try:
             return raw.decode(encoding)
         except UnicodeDecodeError:
@@ -173,7 +174,8 @@ def convert_subtitle_to_utf8(subtitle_path: str) -> str | None:
 
     Returns the temp file path, or None if already valid UTF-8 or undecodable.
     """
-    raw = open(subtitle_path, "rb").read()
+    with open(subtitle_path, "rb") as f:
+        raw = f.read()
 
     # Already valid UTF-8 (with or without BOM) → no conversion needed
     try:
@@ -183,7 +185,7 @@ def convert_subtitle_to_utf8(subtitle_path: str) -> str | None:
         pass
 
     text = None
-    for encoding in ("cp949", "euc-kr"):
+    for encoding in ("utf-16", "cp949", "euc-kr"):
         try:
             text = raw.decode(encoding)
             break

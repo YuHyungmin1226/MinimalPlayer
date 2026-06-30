@@ -124,7 +124,9 @@ class ClickableSlider(QSlider):
             new_value = self.minimum() + (self.maximum() - self.minimum()) * event.position().x() / self.width()
             self.setValue(int(new_value))
             self.sliderMoved.emit(int(new_value))
-        super().mousePressEvent(event)
+            event.accept()
+        else:
+            super().mousePressEvent(event)
 
 
 class VideoPlayer(QMainWindow):
@@ -135,30 +137,36 @@ class VideoPlayer(QMainWindow):
         self.media_ended = False
         self.last_time_pos = 0
         self.last_duration = 0
-        self.converted_subtitle_paths = []
         self._drag_pos = None
-        self._audio_pixmap: QPixmap | None = None
-        self._audio_subtitle_on = False
-
+        self._audio_pixmap: QPixmap = None
+        
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.resize(1000, 600)
         self.setStyleSheet(STYLE)
 
         self._build_ui()
-        self._init_player()
 
-        self.timer = QTimer()
-        self.timer.setInterval(200)
+        self.settings = QSettings(ORG_NAME, APP_NAME)
+
+        self.recent_actions: list[QAction] = []
+        self._update_recent_menu()
+
+        self.converted_subtitle_paths: list[str] = []
+        self.temp_files_to_clean = set()
+
+        saved_vol = self.settings.value("volume", DEFAULT_VOLUME, type=int)
+        self.vol_slider.setValue(saved_vol)
+
+        self.timer = QTimer(self)
+        self.timer.setInterval(100)
         self.timer.timeout.connect(self.update_status)
         self.timer.start()
 
-        # Fullscreen mouse inactivity timer
         self.mouse_timer = QTimer(self)
         self.mouse_timer.setInterval(3000)
         self.mouse_timer.setSingleShot(True)
         self.mouse_timer.timeout.connect(self._hide_controls_on_timeout)
 
-        # Mouse tracking & Event Filter setup
         self.setMouseTracking(True)
         self.central_widget.setMouseTracking(True)
         self.media_stack.setMouseTracking(True)
@@ -175,6 +183,7 @@ class VideoPlayer(QMainWindow):
         self.control_bar.installEventFilter(self)
 
         self.setFocus()
+        self._init_player()
 
     def _build_ui(self):
         self.central_widget = QWidget()
@@ -209,22 +218,17 @@ class VideoPlayer(QMainWindow):
         self.title_bar_layout.addWidget(self.close_btn)
         self.main_layout.addWidget(self.title_bar)
 
-        # QStackedWidget으로 비디오/오디오 뷰를 전환 (layout 붕괴 방지)
         self.media_stack = QStackedWidget()
         self.media_stack.setObjectName("VideoContainer")
 
-        if IS_MAC:
-            self.video_container = MpvGLWidget()
-        else:
-            self.video_container = QWidget()
+        self.video_widget = MpvGLWidget(self.media_stack)
+        self.media_stack.addWidget(self.video_widget)
+        self.video_container = self.video_widget
 
-        # 오디오 모드 표시 레이블 (커버 이미지 또는 ♪). Qt가 직접 그리므로
-        # 창이 가려졌다 나타나도 항상 다시 그려진다(mpv 정지프레임 미재draw 회피).
         self.audio_label = QLabel("♪")
         self.audio_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.audio_label.setStyleSheet("QLabel { background-color: #000; color: #444; font-size: 80px; }")
 
-        # 오디오 모드 자막 오버레이 (mpv의 sub_text를 읽어 표시)
         self.audio_sub_label = QLabel("", self.audio_label)
         self.audio_sub_label.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
         self.audio_sub_label.setWordWrap(True)
@@ -234,10 +238,8 @@ class VideoPlayer(QMainWindow):
         )
         self.audio_sub_label.hide()
 
-        self.media_stack.addWidget(self.video_container)  # index 0: 비디오
-        self.media_stack.addWidget(self.audio_label)       # index 1: 오디오
+        self.media_stack.addWidget(self.audio_label)
 
-        # WA_NativeWindow는 위젯이 부모 트리에 추가된 후 설정
         if not IS_MAC:
             self.video_container.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
 
@@ -313,8 +315,7 @@ class VideoPlayer(QMainWindow):
         try:
             if IS_MAC:
                 self.player = mpv.MPV(vo="libmpv", ytdl=True, osc=False, keep_open=True)
-                if isinstance(self.video_container, MpvGLWidget):
-                    self.video_container.set_player(self.player)
+                self.video_container.set_player(self.player)
             else:
                 self.player = mpv.MPV(
                     wid=str(int(self.video_container.winId())),
@@ -354,24 +355,35 @@ class VideoPlayer(QMainWindow):
             self.settings.setValue(self._setting_key_for_path(str(self.current_media_path)), pos)
 
     def _maybe_resume(self, path):
-        saved = float(str(self.settings.value(self._setting_key_for_path(path), 0) or 0))
-        if saved < RESUME_THRESHOLD_SECONDS:
-            return
-        was_paused = self.player.pause
-        self.player.pause = True
-        answer = QMessageBox.question(
-            self,
-            "Resume Playback",
-            f"Resume from {format_time(saved)}?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
-        )
-        if answer == QMessageBox.StandardButton.Yes:
-            self.player.time_pos = saved
-            self.player.pause = False
-            self.media_ended = False
-        else:
-            self.player.pause = was_paused
+        try:
+            if not self.player or not self.current_media_path or path != self.current_media_path:
+                return
+            saved = float(str(self.settings.value(self._setting_key_for_path(path), 0) or 0))
+            if saved < RESUME_THRESHOLD_SECONDS:
+                return
+
+            duration = self.player.duration
+            if duration is None or duration <= 0:
+                QTimer.singleShot(100, self, lambda: self._maybe_resume(path))
+                return
+
+            was_paused = self.player.pause
+            self.player.pause = True
+            answer = QMessageBox.question(
+                self,
+                "Resume Playback",
+                f"Resume from {format_time(saved)}?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                self.player.time_pos = saved
+                self.player.pause = False
+                self.media_ended = False
+            else:
+                self.player.pause = was_paused
+        except Exception as e:
+            print(f"Error in resume playback check: {e}")
 
     def _recent_files(self):
         value = self.settings.value("recentFiles", [])
@@ -383,15 +395,21 @@ class VideoPlayer(QMainWindow):
 
     def _remember_recent_file(self, path: str) -> None:
         self.settings.setValue("recentFiles", normalize_recent_files(self._recent_files(), path, RECENT_FILES_LIMIT))
+        self._update_recent_menu()
 
     def clear_recent_files(self) -> None:
         self.settings.setValue("recentFiles", [])
+        self._update_recent_menu()
+
+    def _update_recent_menu(self) -> None:
+        self.recent_actions = []
 
     def _cleanup_paths(self, paths: list[str]) -> None:
         for path in paths:
             try:
                 if os.path.exists(path):
                     os.remove(path)
+                    self.temp_files_to_clean.discard(path)
             except OSError:
                 pass
 
@@ -400,6 +418,7 @@ class VideoPlayer(QMainWindow):
         if path in recent:
             recent.remove(path)
             self.settings.setValue("recentFiles", recent)
+            self._update_recent_menu()
 
     def _cleanup_converted_subtitles(self):
         for path in self.converted_subtitle_paths:
@@ -411,18 +430,19 @@ class VideoPlayer(QMainWindow):
         self.converted_subtitle_paths = []
 
     def _subtitle_path_for_player(self, subtitle_path: str) -> str:
-        ext = os.path.splitext(subtitle_path)[1].lower()
-        if ext == ".smi":
+        _, ext = os.path.splitext(subtitle_path)
+        if ext.lower() == ".smi":
             converted_path = convert_smi_file_to_temp_srt(subtitle_path)
             if converted_path:
                 self.converted_subtitle_paths.append(converted_path)
+                self.temp_files_to_clean.add(converted_path)
                 return converted_path
-            return subtitle_path
-        # Re-encode non-UTF-8 SRT/ASS/VTT to UTF-8
-        converted_path = convert_subtitle_to_utf8(subtitle_path)
-        if converted_path:
-            self.converted_subtitle_paths.append(converted_path)
-            return converted_path
+        else:
+            converted_path = convert_subtitle_to_utf8(subtitle_path)
+            if converted_path:
+                self.converted_subtitle_paths.append(converted_path)
+                self.temp_files_to_clean.add(converted_path)
+                return converted_path
         return subtitle_path
 
     def toggle_pause(self):
@@ -439,44 +459,59 @@ class VideoPlayer(QMainWindow):
 
     def seek(self, position: int) -> None:
         if self.has_video():
-            self.player.time_pos = position
+            try:
+                self.player.time_pos = position
+            except (AttributeError, mpv.ShutdownError):
+                pass
 
     def set_volume(self, value: int, show_osd: bool = False) -> None:
         if not hasattr(self, "player") or not self.player:
             return
         new_vol = max(0, min(100, value))
-        self.player.volume = new_vol
-        if self.vol_slider.value() != new_vol:
-            self.vol_slider.setValue(new_vol)
-        if show_osd:
-            self.player.show_text(f"Volume: {new_vol}%", duration=1500)
+        try:
+            self.player.volume = new_vol
+            if self.vol_slider.value() != new_vol:
+                self.vol_slider.blockSignals(True)
+                self.vol_slider.setValue(new_vol)
+                self.vol_slider.blockSignals(False)
+            if show_osd:
+                self.player.show_text(f"Volume: {new_vol}%", duration=1500)
+        except (AttributeError, mpv.ShutdownError):
+            pass
 
     def skip(self, seconds: int) -> None:
         if self.has_video():
-            if self.media_ended:
-                if seconds < 0:
-                    self.media_ended = False
-                    self.player.time_pos = max(0, self.last_duration + seconds)
-            else:
-                self.player.seek(seconds, reference="relative")
+            try:
+                if self.media_ended:
+                    if seconds < 0:
+                        self.media_ended = False
+                        self.player.time_pos = max(0, self.last_duration + seconds)
+                else:
+                    self.player.seek(seconds, reference="relative")
+            except (AttributeError, mpv.ShutdownError):
+                pass
 
     def adjust_sub_delay(self, delta: float) -> None:
         if not self.has_video():
             return
-        current = getattr(self.player, "sub_delay", 0)
-        new_delay = current + delta
-        self.player.sub_delay = new_delay
-        self.player.show_text(f"Subtitle Sync: {new_delay:+.1f}s", duration=1500)
-        print(f"Subtitle sync delay: {self.player.sub_delay:.1f}s")
+        try:
+            current = self.player.sub_delay
+            new_delay = round(current + delta, 1)
+            self.player.sub_delay = new_delay
+            self.player.show_text(f"Subtitle Sync: {new_delay:+.1f}s", duration=1500)
+        except (AttributeError, mpv.ShutdownError):
+            pass
 
     def adjust_sub_scale(self, delta: float) -> None:
         if not self.has_video():
             return
-        current = getattr(self.player, "sub_scale", 1.0)
-        new_scale = max(0.1, min(5.0, current + delta))
-        self.player.sub_scale = new_scale
-        self.player.show_text(f"Subtitle Scale: {new_scale:.1f}x", duration=1500)
-        print(f"Subtitle scale: {new_scale:.1f}x")
+        try:
+            current = self.player.sub_scale
+            new_scale = round(max(0.1, min(5.0, current + delta)), 1)
+            self.player.sub_scale = new_scale
+            self.player.show_text(f"Subtitle Scale: {new_scale:.1f}x", duration=1500)
+        except (AttributeError, mpv.ShutdownError):
+            pass
 
     def update_status(self):
         try:
@@ -559,13 +594,10 @@ class VideoPlayer(QMainWindow):
         is_audio = is_supported_audio(self.current_media_path)
         image_path = find_matching_image(self.current_media_path) if is_audio else None
 
-        self.player.play(self.current_media_path)
         self.title_label.setText(os.path.basename(self.current_media_path))
         self._remember_recent_file(self.current_media_path)
 
         if is_audio:
-            # 오디오는 Qt 레이블에 커버 이미지(또는 ♪)를 그리고, 자막은 sub_text를
-            # Qt 오버레이로 표시한다. mpv 영상 출력에 의존하지 않아 항상 안정적으로 보인다.
             self._set_audio_image(image_path)
             self._audio_subtitle_on = bool(sub_path)
             self.audio_sub_label.setText("")
@@ -577,12 +609,21 @@ class VideoPlayer(QMainWindow):
             self.audio_sub_label.hide()
             self.media_stack.setCurrentWidget(self.video_container)
 
+        player_sub_path = None
         if sub_path:
-            player_sub_path = self._subtitle_path_for_player(sub_path)
-            print(f"Subtitle found and loaded: {player_sub_path}")
-            self.player.sub_add(player_sub_path)
+            try:
+                player_sub_path = self._subtitle_path_for_player(sub_path)
+                print(f"Subtitle found and prepared: {player_sub_path}")
+            except Exception as e:
+                print(f"Error preparing subtitle: {e}")
 
-        # Defer cleanup of old subtitles to let mpv release file locks on them
+        if player_sub_path:
+            self.player.loadfile(self.current_media_path, sub_file=player_sub_path)
+        else:
+            self.player.loadfile(self.current_media_path)
+
+        self.player.pause = False
+
         QTimer.singleShot(1000, self, lambda: self._cleanup_paths(old_paths))
         QTimer.singleShot(500, self, lambda path=self.current_media_path: self._maybe_resume(path))
 
@@ -735,10 +776,15 @@ class VideoPlayer(QMainWindow):
 
     def closeEvent(self, event):
         self._save_current_position()
+        self.settings.setValue("volume", self.vol_slider.value())
         self._cleanup_converted_subtitles()
-        if hasattr(self, "timer"):
-            self.timer.stop()
-        if isinstance(self.video_container, MpvGLWidget):
+        for path in list(self.temp_files_to_clean):
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError:
+                pass
+        if self.video_container and isinstance(self.video_container, MpvGLWidget):
             self.video_container.shutdown()
         if hasattr(self, "player") and self.player:
             try:

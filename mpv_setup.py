@@ -38,10 +38,9 @@ def check_and_download_mpv():
             None,
             "Invalid mpv DLL",
             f"Existing {MPV_DLL_NAME} failed SHA256 verification.\n"
-            "It will be removed. Please run the app again to download a clean copy.",
+            "It will be removed, and a clean copy will be downloaded.",
         )
         os.remove(dll_path)
-        sys.exit(1)
 
     if QApplication.instance() is None:
         QApplication(sys.argv)
@@ -76,12 +75,13 @@ def check_and_download_mpv():
             raise RuntimeError("Downloaded file failed SHA256 verification.")
         os.replace(tmp_path, dll_path)
     except Exception as e:
-        _ = QMessageBox.critical(
-            None,
-            "Download Failed",
-            f"An error occurred during download:\n{e}\n\n"
-            "Please try again, or download it manually from the GitHub Release page."
-        )
+        if str(e) != "Download canceled.":
+            _ = QMessageBox.critical(
+                None,
+                "Download Failed",
+                f"An error occurred during download:\n{e}\n\n"
+                "Please try again, or download it manually from the GitHub Release page."
+            )
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
         sys.exit(1)
