@@ -589,6 +589,10 @@ class VideoPlayer(QMainWindow):
         self._remember_recent_file(self.current_media_path)
 
         if is_audio:
+            try:
+                self.player.vid = "no"
+            except Exception:
+                pass
             self._set_audio_image(image_path)
             self._audio_subtitle_on = bool(sub_path)
             self.audio_sub_label.setText("")
@@ -596,6 +600,10 @@ class VideoPlayer(QMainWindow):
             self.media_stack.setCurrentWidget(self.audio_label)
             QTimer.singleShot(50, self, self._reposition_audio_subtitle)
         else:
+            try:
+                self.player.vid = "auto"
+            except Exception:
+                pass
             self._audio_subtitle_on = False
             self.audio_sub_label.hide()
             self.media_stack.setCurrentWidget(self.video_container)
