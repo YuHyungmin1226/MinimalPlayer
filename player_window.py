@@ -2,9 +2,10 @@ import locale
 import os
 import sys
 import importlib
+import shutil
 from typing import Any, cast
 
-from PySide6.QtCore import QEvent, QSettings, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QSettings, Qt, QTimer, Signal, QProcess
 from PySide6.QtGui import QAction, QOpenGLContext, QPixmap
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import (
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QVBoxLayout,
     QWidget,
+    QProgressDialog,
 )
 
 from constants import (
@@ -802,6 +804,12 @@ class VideoPlayer(QMainWindow):
         open_action.triggered.connect(self.open_file_dialog)
         menu.addAction(open_action)
 
+        # WAV/Audio to Video Export Option
+        if self.current_media_path and is_supported_audio(self.current_media_path):
+            export_action = QAction("Export to MP4 Video...", self)
+            export_action.triggered.connect(self.export_as_video)
+            menu.addAction(export_action)
+
         recent_files = self._recent_files()
         if recent_files:
             recent_menu = menu.addMenu("Recent Files")
@@ -865,3 +873,148 @@ class VideoPlayer(QMainWindow):
                         "Execution Failed",
                         f"Failed to open Settings:\n{e}\n\nPlease search for 'Default apps' manually in the Windows Start menu.",
                     )
+
+    def export_as_video(self):
+        if not self.current_media_path or not is_supported_audio(self.current_media_path):
+            return
+
+        # 1. Verify FFmpeg installation
+        if not shutil.which("ffmpeg"):
+            _ = QMessageBox.critical(
+                self,
+                "FFmpeg Required",
+                "FFmpeg media utility is required to export videos.\n\n"
+                "Please install FFmpeg and add it to your system PATH."
+            )
+            return
+
+        # 2. Get Cover Image
+        image_path = find_matching_image(self.current_media_path)
+        if not image_path:
+            _ = QMessageBox.information(
+                self,
+                "No Cover Image Found",
+                "No matching cover image was automatically found for this audio.\n\n"
+                "Please select an image file to use as the video background."
+            )
+            image_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Cover Image",
+                "",
+                "Images (*.png *.jpg *.jpeg *.bmp *.webp)"
+            )
+            if not image_path:
+                return
+
+        # 3. Get Output path
+        base_name, _ = os.path.splitext(os.path.basename(self.current_media_path))
+        output_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Video",
+            os.path.join(os.path.dirname(self.current_media_path), f"{base_name}.mp4"),
+            "MP4 Video (*.mp4)"
+        )
+        if not output_path:
+            return
+
+        # 4. Check for subtitles
+        sub_path = find_matching_subtitle(self.current_media_path)
+
+        # 5. Build FFmpeg command arguments
+        args = ["-y"]
+        args += ["-loop", "1", "-i", image_path]
+        args += ["-i", self.current_media_path]
+
+        vf_filters = []
+        if sub_path:
+            srt_path = self._subtitle_path_for_player(sub_path)
+            escaped_sub = self._escape_ffmpeg_path(srt_path)
+            vf_filters.append(f"subtitles='{escaped_sub}'")
+
+        if vf_filters:
+            args += ["-vf", ",".join(vf_filters)]
+
+        args += ["-c:v", "libx264", "-tune", "stillimage", "-pix_fmt", "yuv420p"]
+        args += ["-c:a", "aac", "-b:a", "192k"]
+        args += ["-shortest"]
+        args += ["-progress", "pipe:1"]
+        args += [output_path]
+
+        # 6. Initialize progress dialog
+        self.export_dialog = QProgressDialog(
+            "Encoding audio, cover, and subtitles to MP4...",
+            "Cancel",
+            0,
+            100,
+            self
+        )
+        self.export_dialog.setWindowTitle("Exporting Video")
+        self.export_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        self.export_dialog.canceled.connect(self._cancel_export)
+        self.export_dialog.show()
+
+        # 7. Start QProcess
+        self.export_cancelled = False
+        self.export_process = QProcess(self)
+        self.export_process.readyReadStandardOutput.connect(self._handle_export_progress)
+        self.export_process.errorOccurred.connect(self._handle_export_error)
+        self.export_process.finished.connect(self._handle_export_finished)
+        self.export_process.start("ffmpeg", args)
+
+    def _escape_ffmpeg_path(self, path: str) -> str:
+        path = path.replace("\\", "/")
+        path = path.replace(":", "\\:")
+        path = path.replace(",", "\\,")
+        path = path.replace("'", "'\\\\\\''")
+        return path
+
+    def _cancel_export(self):
+        self.export_cancelled = True
+        if hasattr(self, "export_process") and self.export_process and self.export_process.state() == QProcess.ProcessState.Running:
+            self.export_process.kill()
+
+    def _handle_export_progress(self):
+        data = self.export_process.readAllStandardOutput().data().decode("utf-8", errors="replace")
+        for line in data.splitlines():
+            if line.startswith("out_time_us="):
+                try:
+                    us = int(line.split("=")[1])
+                    current_sec = us / 1000000.0
+                    if self.last_duration > 0:
+                        pct = min(100, max(0, int((current_sec / self.last_duration) * 100)))
+                        self.export_dialog.setValue(pct)
+                except ValueError:
+                    pass
+
+    def _handle_export_finished(self, exit_code, exit_status):
+        self.export_dialog.close()
+        if self.export_cancelled:
+            _ = QMessageBox.information(self, "Export Cancelled", "Video export was cancelled by the user.")
+            return
+
+        if exit_status == QProcess.ExitStatus.NormalExit and exit_code == 0:
+            _ = QMessageBox.information(self, "Export Complete", "Video exported successfully!")
+        else:
+            err = self.export_process.readAllStandardError().data().decode("utf-8", errors="replace")
+            _ = QMessageBox.critical(
+                self,
+                "Export Failed",
+                f"An error occurred during video export.\n\nDetails:\n{err[:500]}"
+            )
+
+    def _handle_export_error(self, error):
+        if hasattr(self, "export_dialog") and self.export_dialog.wasCanceled():
+            return
+        if hasattr(self, "export_dialog"):
+            self.export_dialog.close()
+
+        error_msgs = {
+            QProcess.ProcessError.FailedToStart: "FFmpeg executable not found. Make sure ffmpeg is in your system PATH.",
+            QProcess.ProcessError.Crashed: "FFmpeg crashed during execution.",
+            QProcess.ProcessError.Timedout: "FFmpeg operation timed out.",
+            QProcess.ProcessError.WriteError: "An error occurred writing to FFmpeg.",
+            QProcess.ProcessError.ReadError: "An error occurred reading from FFmpeg.",
+            QProcess.ProcessError.UnknownError: "An unknown process error occurred."
+        }
+        msg = error_msgs.get(error, "An error occurred running FFmpeg.")
+        _ = QMessageBox.critical(self, "Export Error", msg)
