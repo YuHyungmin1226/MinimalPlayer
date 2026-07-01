@@ -75,18 +75,51 @@ class MpvGLWidget(QOpenGLWidget):
     def _on_mpv_update(self):
         self._frame_ready.emit()
 
+    def has_video_track(self) -> bool:
+        if self._player is None:
+            return False
+        try:
+            vid = self._player.vid
+            if vid in (False, "no", None):
+                return False
+            tracks = getattr(self._player, "track_list", None)
+            if tracks:
+                return any(t.get("type") == "video" for t in tracks)
+            return False
+        except Exception:
+            return False
+
     def paintGL(self):
         if self._ctx is None:
             self.initializeGL()
             if self._ctx is None:
                 return
+
+        if not self.has_video_track():
+            try:
+                funcs = self.context().functions()
+                funcs.glClearColor(0.0, 0.0, 0.0, 1.0)
+                funcs.glClear(0x00004000)  # GL_COLOR_BUFFER_BIT
+            except Exception:
+                pass
+            return
+
         ratio = self.devicePixelRatioF()
         width = max(1, int(round(self.width() * ratio)))
         height = max(1, int(round(self.height() * ratio)))
-        self._ctx.render(
-            flip_y=True,
-            opengl_fbo={"w": width, "h": height, "fbo": self.defaultFramebufferObject()},
-        )
+        try:
+            self._ctx.render(
+                flip_y=True,
+                opengl_fbo={"w": width, "h": height, "fbo": self.defaultFramebufferObject()},
+            )
+        except Exception as e:
+            print(f"MpvGLWidget: Render context failed to render: {e}")
+            try:
+                funcs = self.context().functions()
+                funcs.glClearColor(0.0, 0.0, 0.0, 1.0)
+                funcs.glClear(0x00004000)  # GL_COLOR_BUFFER_BIT
+            except Exception:
+                pass
 
     def shutdown(self):
         if self._ctx is not None:
@@ -508,6 +541,24 @@ class VideoPlayer(QMainWindow):
         try:
             if not self.player:
                 return
+
+            if self.current_media_path and self.media_stack.currentWidget() == self.video_container:
+                tracks = getattr(self.player, "track_list", None)
+                if tracks:
+                    has_vid = any(t.get("type") == "video" for t in tracks)
+                    if not has_vid:
+                        try:
+                            self.player.vid = "no"
+                        except Exception:
+                            pass
+                        image_path = find_matching_image(self.current_media_path)
+                        self._set_audio_image(image_path)
+                        self._audio_subtitle_on = bool(find_matching_subtitle(self.current_media_path))
+                        self.audio_sub_label.setText("")
+                        self.audio_sub_label.setVisible(False)
+                        self.media_stack.setCurrentWidget(self.audio_label)
+                        self._reposition_audio_subtitle()
+
             if self._audio_subtitle_on:
                 text = self.player.sub_text or ""
                 if self.audio_sub_label.text() != text:
