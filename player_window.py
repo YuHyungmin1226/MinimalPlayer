@@ -547,13 +547,6 @@ class VideoPlayer(QMainWindow):
             if not self.player:
                 return
 
-            player_path = getattr(self.player, "path", None)
-            if self.current_media_path:
-                if not player_path or os.path.normpath(player_path) != os.path.normpath(self.current_media_path):
-                    return
-            else:
-                return
-
             if self.current_media_path and self.media_stack.currentWidget() == self.video_container:
                 tracks = getattr(self.player, "track_list", None)
                 if tracks:
@@ -588,6 +581,9 @@ class VideoPlayer(QMainWindow):
 
             if duration is not None and duration > 0:
                 self.last_duration = int(duration)
+            elif self.current_media_path:
+                # Still loading/parsing the media. Defer updates.
+                return
 
             if (eof_reached or (idle_active and time_pos is None)) and self.last_duration > 0:
                 self.media_ended = True
