@@ -581,18 +581,16 @@ class VideoPlayer(QMainWindow):
 
             if duration is not None and duration > 0:
                 self.last_duration = int(duration)
-            elif self.current_media_path:
-                # Still loading/parsing the media. Defer updates.
-                return
 
-            if (eof_reached or (idle_active and time_pos is None)) and self.last_duration > 0:
-                self.media_ended = True
-                self.seek_slider.setMaximum(self.last_duration)
-                self.seek_slider.setValue(self.last_duration)
-                self.time_label.setText(f"{format_time(self.last_duration)} / {format_time(self.last_duration)}")
-                if self.play_btn.text() != "Play":
-                    self.play_btn.setText("Play")
-                return
+            if duration is not None and duration > 0:
+                if (eof_reached or (idle_active and time_pos is None)):
+                    self.media_ended = True
+                    self.seek_slider.setMaximum(self.last_duration)
+                    self.seek_slider.setValue(self.last_duration)
+                    self.time_label.setText(f"{format_time(self.last_duration)} / {format_time(self.last_duration)}")
+                    if self.play_btn.text() != "Play":
+                        self.play_btn.setText("Play")
+                    return
 
             if time_pos is not None:
                 self.media_ended = False
