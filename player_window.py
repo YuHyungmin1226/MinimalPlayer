@@ -379,6 +379,8 @@ class VideoPlayer(QMainWindow):
             self.settings.setValue(self._setting_key_for_path(str(self.current_media_path)), pos)
 
     def _maybe_resume(self, path):
+        if getattr(self, "_is_resuming", False):
+            return
         try:
             if not self.player or not self.current_media_path or path != self.current_media_path:
                 return
@@ -391,6 +393,7 @@ class VideoPlayer(QMainWindow):
                 QTimer.singleShot(100, self, lambda: self._maybe_resume(path))
                 return
 
+            self._is_resuming = True
             was_paused = self.player.pause
             self.player.pause = True
             answer = QMessageBox.question(
@@ -408,6 +411,8 @@ class VideoPlayer(QMainWindow):
                 self.player.pause = was_paused
         except Exception as e:
             print(f"Error in resume playback check: {e}")
+        finally:
+            self._is_resuming = False
 
     def _recent_files(self):
         value = self.settings.value("recentFiles", [])
@@ -542,6 +547,13 @@ class VideoPlayer(QMainWindow):
             if not self.player:
                 return
 
+            player_path = getattr(self.player, "path", None)
+            if self.current_media_path:
+                if not player_path or os.path.normpath(player_path) != os.path.normpath(self.current_media_path):
+                    return
+            else:
+                return
+
             if self.current_media_path and self.media_stack.currentWidget() == self.video_container:
                 tracks = getattr(self.player, "track_list", None)
                 if tracks:
@@ -564,13 +576,20 @@ class VideoPlayer(QMainWindow):
                 if self.audio_sub_label.text() != text:
                     self.audio_sub_label.setText(text)
                     self.audio_sub_label.setVisible(bool(text.strip()))
-            play_text = "Play"
-            time_pos = self.player.time_pos
-            duration = self.player.duration
-            idle_active = bool(getattr(self.player, "idle_active", False))
-            eof_reached = bool(getattr(self.player, "eof_reached", False))
 
-            if self.has_video() and (eof_reached or (idle_active and time_pos is None)) and self.last_duration > 0:
+            try:
+                time_pos = self.player.time_pos
+                duration = self.player.duration
+                is_paused = bool(self.player.pause)
+                idle_active = bool(getattr(self.player, "idle_active", False))
+                eof_reached = bool(getattr(self.player, "eof_reached", False))
+            except (AttributeError, mpv.ShutdownError):
+                return
+
+            if duration is not None and duration > 0:
+                self.last_duration = int(duration)
+
+            if (eof_reached or (idle_active and time_pos is None)) and self.last_duration > 0:
                 self.media_ended = True
                 self.seek_slider.setMaximum(self.last_duration)
                 self.seek_slider.setValue(self.last_duration)
@@ -579,25 +598,35 @@ class VideoPlayer(QMainWindow):
                     self.play_btn.setText("Play")
                 return
 
-            if self.has_video() and time_pos is not None:
+            if time_pos is not None:
                 self.media_ended = False
-                play_text = "Play" if self.player.pause else "Pause"
-            if self.play_btn.text() != play_text:
-                self.play_btn.setText(play_text)
-
-            if self.has_video() and time_pos is not None:
                 curr = int(time_pos)
-                total = int(duration or 0)
-                self.last_time_pos = curr
+                total = self.last_duration if self.last_duration > 0 else int(duration or 0)
+                
                 if total > 0:
-                    self.last_duration = total
+                    curr = min(curr, total)
+                
+                self.last_time_pos = curr
                 self.seek_slider.setMaximum(total)
                 if not self.seek_slider.isSliderDown():
                     self.seek_slider.setValue(curr)
                 self.time_label.setText(f"{format_time(curr)} / {format_time(total)}")
-        except (mpv.ShutdownError, AttributeError):
+
+            if self.media_ended:
+                play_text = "Play"
+            else:
+                play_text = "Play" if is_paused else "Pause"
+
+            if self.play_btn.text() != play_text:
+                self.play_btn.setText(play_text)
+
+        except (mpv.ShutdownError, AttributeError, Exception) as e:
+            print(f"Error in update_status: {e}")
             if hasattr(self, "timer"):
-                self.timer.stop()
+                try:
+                    self.timer.stop()
+                except Exception:
+                    pass
 
     def open_file_dialog(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -616,74 +645,76 @@ class VideoPlayer(QMainWindow):
     def load_video(self, path):
         if not self.player:
             return
-        if not os.path.isfile(path):
-            _ = QMessageBox.warning(self, "File Not Found", "The selected file does not exist.")
-            self._remove_from_recent_files(path)
+        if getattr(self, "_is_loading", False):
             return
-        if not is_supported_media(path):
-            _ = QMessageBox.warning(self, "Unsupported File", "Please select a supported video or audio file.")
-            return
+        self._is_loading = True
+        try:
+            if not os.path.isfile(path):
+                _ = QMessageBox.warning(self, "File Not Found", "The selected file does not exist.")
+                self._remove_from_recent_files(path)
+                return
+            if not is_supported_media(path):
+                _ = QMessageBox.warning(self, "Unsupported File", "Please select a supported video or audio file.")
+                return
 
-        self._save_current_position()
-        if self.video_container:
-            try:
-                self.video_container.shutdown()
-            except Exception:
-                pass
-        old_paths = list(self.converted_subtitle_paths)
-        self.converted_subtitle_paths = []
-        self.current_media_path = os.path.abspath(path)
-        self.media_ended = False
-        self.last_time_pos = 0
-        self.last_duration = 0
+            self._save_current_position()
+            
+            old_paths = list(self.converted_subtitle_paths)
+            self.converted_subtitle_paths = []
+            self.current_media_path = os.path.abspath(path)
+            self.media_ended = False
+            self.last_time_pos = 0
+            self.last_duration = 0
 
-        sub_path = find_matching_subtitle(self.current_media_path)
-        is_audio = is_supported_audio(self.current_media_path)
-        image_path = find_matching_image(self.current_media_path) if is_audio else None
+            sub_path = find_matching_subtitle(self.current_media_path)
+            is_audio = is_supported_audio(self.current_media_path)
+            image_path = find_matching_image(self.current_media_path) if is_audio else None
 
-        self.title_label.setText(os.path.basename(self.current_media_path))
-        self._remember_recent_file(self.current_media_path)
+            self.title_label.setText(os.path.basename(self.current_media_path))
+            self._remember_recent_file(self.current_media_path)
 
-        if is_audio:
-            try:
-                self.player.vid = "no"
-            except Exception:
-                pass
-            self._set_audio_image(image_path)
-            self._audio_subtitle_on = bool(sub_path)
-            self.audio_sub_label.setText("")
-            self.audio_sub_label.setVisible(False)
-            self.media_stack.setCurrentWidget(self.audio_label)
-            QTimer.singleShot(50, self, self._reposition_audio_subtitle)
-        else:
-            try:
-                self.player.vid = "auto"
-            except Exception:
-                pass
-            self._audio_subtitle_on = False
-            self.audio_sub_label.hide()
-            self.media_stack.setCurrentWidget(self.video_container)
+            if is_audio:
+                try:
+                    self.player.vid = "no"
+                except Exception:
+                    pass
+                self._set_audio_image(image_path)
+                self._audio_subtitle_on = bool(sub_path)
+                self.audio_sub_label.setText("")
+                self.audio_sub_label.setVisible(False)
+                self.media_stack.setCurrentWidget(self.audio_label)
+                QTimer.singleShot(50, self, self._reposition_audio_subtitle)
+            else:
+                try:
+                    self.player.vid = "auto"
+                except Exception:
+                    pass
+                self._audio_subtitle_on = False
+                self.audio_sub_label.hide()
+                self.media_stack.setCurrentWidget(self.video_container)
 
-        player_sub_path = None
-        if sub_path:
-            try:
-                player_sub_path = self._subtitle_path_for_player(sub_path)
-                print(f"Subtitle found and prepared: {player_sub_path}")
-            except Exception as e:
-                print(f"Error preparing subtitle: {e}")
+            player_sub_path = None
+            if sub_path:
+                try:
+                    player_sub_path = self._subtitle_path_for_player(sub_path)
+                    print(f"Subtitle found and prepared: {player_sub_path}")
+                except Exception as e:
+                    print(f"Error preparing subtitle: {e}")
 
-        if player_sub_path:
-            self.player.loadfile(self.current_media_path, sub_file=player_sub_path)
-        else:
-            self.player.loadfile(self.current_media_path)
+            if player_sub_path:
+                self.player.loadfile(self.current_media_path, sub_file=player_sub_path)
+            else:
+                self.player.loadfile(self.current_media_path)
 
-        self.player.pause = False
-        if self.video_container:
-            self.video_container.update()
-        self.setFocus()
+            self.player.pause = False
+            if self.video_container:
+                self.video_container.update()
+            self.setFocus()
 
-        QTimer.singleShot(1000, self, lambda: self._cleanup_paths(old_paths))
-        QTimer.singleShot(500, self, lambda path=self.current_media_path: self._maybe_resume(path))
+            QTimer.singleShot(1000, self, lambda: self._cleanup_paths(old_paths))
+            QTimer.singleShot(500, self, lambda path=self.current_media_path: self._maybe_resume(path))
+        finally:
+            self._is_loading = False
 
     def _set_audio_image(self, image_path: str | None) -> None:
         if image_path:
@@ -835,6 +866,19 @@ class VideoPlayer(QMainWindow):
     def closeEvent(self, event):
         self._save_current_position()
         self.settings.setValue("volume", self.vol_slider.value())
+        
+        if hasattr(self, "player") and self.player:
+            try:
+                self.player.terminate()
+            except Exception:
+                pass
+
+        if self.video_container and isinstance(self.video_container, MpvGLWidget):
+            try:
+                self.video_container.shutdown()
+            except Exception:
+                pass
+
         self._cleanup_converted_subtitles()
         for path in list(self.temp_files_to_clean):
             try:
@@ -842,13 +886,7 @@ class VideoPlayer(QMainWindow):
                     os.remove(path)
             except OSError:
                 pass
-        if self.video_container and isinstance(self.video_container, MpvGLWidget):
-            self.video_container.shutdown()
-        if hasattr(self, "player") and self.player:
-            try:
-                self.player.terminate()
-            except Exception:
-                pass
+
         super().closeEvent(event)
 
     def dragEnterEvent(self, event):
