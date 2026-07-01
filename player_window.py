@@ -611,7 +611,7 @@ class VideoPlayer(QMainWindow):
             "All Files (*)",
         )
         if file_path:
-            self.load_video(file_path)
+            QTimer.singleShot(100, self, lambda: self.load_video(file_path))
 
     def load_video(self, path):
         if not self.player:
@@ -883,7 +883,7 @@ class VideoPlayer(QMainWindow):
             for path in recent_files:
                 action = QAction(os.path.basename(path), self)
                 action.setToolTip(path)
-                action.triggered.connect(lambda checked=False, p=path: self.load_video(p))
+                action.triggered.connect(lambda checked=False, p=path: QTimer.singleShot(100, self, lambda: self.load_video(p)))
                 recent_menu.addAction(action)
             recent_menu.addSeparator()
             clear_action = QAction("Clear Recent Files", self)
