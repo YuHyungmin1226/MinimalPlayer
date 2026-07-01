@@ -625,6 +625,11 @@ class VideoPlayer(QMainWindow):
             return
 
         self._save_current_position()
+        if self.video_container:
+            try:
+                self.video_container.shutdown()
+            except Exception:
+                pass
         old_paths = list(self.converted_subtitle_paths)
         self.converted_subtitle_paths = []
         self.current_media_path = os.path.abspath(path)
@@ -673,6 +678,9 @@ class VideoPlayer(QMainWindow):
             self.player.loadfile(self.current_media_path)
 
         self.player.pause = False
+        if self.video_container:
+            self.video_container.update()
+        self.setFocus()
 
         QTimer.singleShot(1000, self, lambda: self._cleanup_paths(old_paths))
         QTimer.singleShot(500, self, lambda path=self.current_media_path: self._maybe_resume(path))
