@@ -699,10 +699,21 @@ class VideoPlayer(QMainWindow):
                 except Exception as e:
                     print(f"Error preparing subtitle: {e}")
 
-            if player_sub_path:
-                self.player.loadfile(self.current_media_path, sub_file=player_sub_path)
-            else:
-                self.player.loadfile(self.current_media_path)
+            try:
+                if player_sub_path:
+                    self.player.loadfile(self.current_media_path, sub_file=player_sub_path)
+                else:
+                    self.player.loadfile(self.current_media_path)
+            except Exception as e:
+                print(f"Error loading file into mpv: {e}")
+                self.current_media_path = None
+                self._audio_subtitle_on = False
+                _ = QMessageBox.critical(
+                    self,
+                    "Playback Error",
+                    f"Failed to load the media file into the player.\n\nDetails: {e}",
+                )
+                return
 
             self.player.pause = False
             if self.video_container:
@@ -865,15 +876,15 @@ class VideoPlayer(QMainWindow):
         self._save_current_position()
         self.settings.setValue("volume", self.vol_slider.value())
         
-        if hasattr(self, "player") and self.player:
-            try:
-                self.player.terminate()
-            except Exception:
-                pass
-
         if self.video_container and isinstance(self.video_container, MpvGLWidget):
             try:
                 self.video_container.shutdown()
+            except Exception:
+                pass
+
+        if hasattr(self, "player") and self.player:
+            try:
+                self.player.terminate()
             except Exception:
                 pass
 
