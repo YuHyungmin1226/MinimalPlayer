@@ -1,3 +1,4 @@
+import hashlib
 import locale
 import os
 import sys
@@ -176,6 +177,7 @@ class VideoPlayer(QMainWindow):
         self.last_duration = 0
         self._drag_pos = None
         self._audio_pixmap: QPixmap = None
+        self._audio_subtitle_on = False
         
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.resize(1000, 600)
@@ -365,7 +367,7 @@ class VideoPlayer(QMainWindow):
         return bool(self.current_media_path)
 
     def _setting_key_for_path(self, path: str) -> str:
-        return "positions/" + path.replace("/", "_").replace("\\", "_").replace(":", "_")
+        return "positions/" + hashlib.sha256(path.encode("utf-8")).hexdigest()
 
     def _save_current_position(self):
         if not self.has_video():
@@ -614,13 +616,15 @@ class VideoPlayer(QMainWindow):
             if self.play_btn.text() != play_text:
                 self.play_btn.setText(play_text)
 
-        except (mpv.ShutdownError, AttributeError, Exception) as e:
+        except mpv.ShutdownError as e:
             print(f"Error in update_status: {e}")
             if hasattr(self, "timer"):
                 try:
                     self.timer.stop()
                 except Exception:
                     pass
+        except Exception as e:
+            print(f"Error in update_status: {e}")
 
     def open_file_dialog(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -975,6 +979,14 @@ class VideoPlayer(QMainWindow):
 
     def export_as_video(self):
         if not self.current_media_path or not is_supported_audio(self.current_media_path):
+            return
+
+        if hasattr(self, "export_process") and self.export_process and self.export_process.state() != QProcess.ProcessState.NotRunning:
+            _ = QMessageBox.information(
+                self,
+                "Export In Progress",
+                "An export is already running. Please wait for it to finish or cancel it first.",
+            )
             return
 
         # 1. Verify FFmpeg installation

@@ -3,7 +3,7 @@ import sys
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from file_association import register_file_associations
-from mpv_setup import IS_LINUX, IS_MAC, prepare_mpv_library
+from mpv_setup import IS_LINUX, IS_MAC, IS_WINDOWS, prepare_mpv_library
 
 
 def show_mpv_import_error(error: BaseException) -> None:
@@ -31,6 +31,9 @@ def show_mpv_import_error(error: BaseException) -> None:
 
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "--register":
+        if not IS_WINDOWS:
+            print("--register is a Windows-only feature (registers a Windows Registry file association).")
+            return 1
         success = register_file_associations(silent=False)
         print("MinimalPlayer registered successfully to registry." if success else "An error occurred during registry registration.")
         return 0 if success else 1

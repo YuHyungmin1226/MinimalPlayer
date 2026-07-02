@@ -41,6 +41,8 @@
 
 ## 🚀 시작하기 (How to Use)
 
+### Windows
+
 1. 프로젝트 클론: `git clone https://github.com/YuHyungmin1226/MinimalPlayer.git`
 2. 폴더 이동: `cd MinimalPlayer`
 3. 파이썬 가상환경 생성 및 활성화:
@@ -51,14 +53,33 @@
 4. 의존성 설치: `pip install -r requirements.txt`
 5. 실행: `python main.py` (최초 실행 시 `mpv-1.dll` 약 118MB 자동 다운로드)
 
-## 🛠 빌드 방법 (직접 .exe 만들기)
+### macOS / Linux
 
-파이썬 환경에서 아래 명령어를 실행하면 `dist/` 폴더 내에 단일 실행 파일이 생성됩니다.
+Windows와 달리 mpv 라이브러리를 자동 다운로드하지 않으며, 시스템에 `mpv`(libmpv)가 설치되어 있어야 합니다.
+
+1. 프로젝트 클론 및 이동: `git clone https://github.com/YuHyungmin1226/MinimalPlayer.git && cd MinimalPlayer`
+2. mpv 라이브러리 설치:
+   - macOS: `brew install mpv`
+   - Linux (Debian/Ubuntu): `sudo apt install libmpv2`
+   - Linux (Fedora): `sudo dnf install mpv-libs`
+3. 파이썬 가상환경 생성 및 활성화:
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate
+   ```
+4. 의존성 설치: `pip install -r requirements.txt`
+5. 실행: `python main.py`
+
+## 🛠 빌드 방법 (직접 실행 파일 만들기)
+
+파이썬 환경에서 아래 명령어를 실행하면 `dist/` 폴더 내에 실행 파일(Windows) 또는 `.app` 번들(macOS)이 생성됩니다.
 ```bash
 python build.py
 ```
 
-> 💡 **Tip (포터블 패키징)**: 빌드를 실행하기 전에 프로젝트 루트 폴더에 `mpv-1.dll`이 이미 존재하면, PyInstaller가 이 DLL을 실행 파일 내부로 자동 번들링합니다. 이 경우, 사용자가 최초 실행 시 별도의 DLL 다운로드 팝업을 거치지 않는 완전한 오프라인 포터블 실행 파일이 생성됩니다.
+> 💡 **Tip (포터블 패키징, Windows)**: 빌드를 실행하기 전에 프로젝트 루트 폴더에 `mpv-1.dll`이 이미 존재하면, PyInstaller가 이 DLL을 실행 파일 내부로 자동 번들링합니다. 이 경우, 사용자가 최초 실행 시 별도의 DLL 다운로드 팝업을 거치지 않는 완전한 오프라인 포터블 실행 파일이 생성됩니다.
+>
+> 💡 **Tip (macOS)**: 빌드 전 `brew install mpv`로 libmpv가 설치되어 있어야 하며, PyInstaller가 libmpv와 그 의존 라이브러리들을 `.app` 내부(`Contents/Frameworks`)에 자동으로 번들링하여 Homebrew가 없는 다른 Mac에서도 실행 가능한 자기완결형 앱을 만듭니다.
 
 ## 📜 라이선스
 이 프로젝트는 MPV 미디어 엔진의 라이선스 정책을 따르며, 오픈 소스로 제공됩니다.
