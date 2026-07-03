@@ -6,12 +6,13 @@ import importlib
 import shutil
 from typing import Any, cast
 
-from PySide6.QtCore import QEvent, QSettings, Qt, QTimer, Signal, QProcess
+from PySide6.QtCore import QEasingCurve, QEvent, QPropertyAnimation, QSettings, Qt, QTimer, Signal, QProcess
 from PySide6.QtGui import QAction, QOpenGLContext, QPixmap
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -184,6 +185,7 @@ class VideoPlayer(QMainWindow):
         self.setStyleSheet(STYLE)
 
         self._build_ui()
+        self._init_fade_animations()
 
         self.settings = QSettings(ORG_NAME, APP_NAME)
 
@@ -763,12 +765,64 @@ class VideoPlayer(QMainWindow):
         label_h = min(160, max(48, h // 4))
         self.audio_sub_label.setGeometry(margin, h - label_h - margin, max(1, w - 2 * margin), label_h)
 
+    def _init_fade_animations(self) -> None:
+        """Set up opacity effects/animations used to smoothly fade the
+        title/control bars in and out during fullscreen auto-hide."""
+        self._title_opacity_effect = QGraphicsOpacityEffect(self.title_bar)
+        self._title_opacity_effect.setOpacity(1.0)
+        self.title_bar.setGraphicsEffect(self._title_opacity_effect)
+
+        self._control_opacity_effect = QGraphicsOpacityEffect(self.control_bar)
+        self._control_opacity_effect.setOpacity(1.0)
+        self.control_bar.setGraphicsEffect(self._control_opacity_effect)
+
+        self._title_fade_anim = QPropertyAnimation(self._title_opacity_effect, b"opacity", self)
+        self._title_fade_anim.setDuration(210)
+        self._title_fade_anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
+        self._title_fade_anim.finished.connect(
+            lambda: self._on_fade_finished(self.title_bar, self._title_opacity_effect)
+        )
+
+        self._control_fade_anim = QPropertyAnimation(self._control_opacity_effect, b"opacity", self)
+        self._control_fade_anim.setDuration(210)
+        self._control_fade_anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
+        self._control_fade_anim.finished.connect(
+            lambda: self._on_fade_finished(self.control_bar, self._control_opacity_effect)
+        )
+
+    def _on_fade_finished(self, widget, effect) -> None:
+        # `finished` fires for both fade-in and fade-out; only hide the
+        # widget if the animation actually settled at (near) zero opacity.
+        if effect.opacity() <= 0.01:
+            widget.hide()
+
+    def _fade_widget_in(self, widget, effect, anim) -> None:
+        anim.stop()
+        if not widget.isVisible():
+            effect.setOpacity(0.0)
+            widget.show()
+        anim.setStartValue(effect.opacity())
+        anim.setEndValue(1.0)
+        anim.start()
+
+    def _fade_widget_out(self, widget, effect, anim) -> None:
+        if not widget.isVisible():
+            return
+        anim.stop()
+        anim.setStartValue(effect.opacity())
+        anim.setEndValue(0.0)
+        anim.start()
+
     def mouseDoubleClickEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             child = self.childAt(event.position().toPoint())
             if child in (self.video_container, self.audio_label, self.media_stack):
                 if self.isFullScreen():
                     self.showNormal()
+                    self._title_fade_anim.stop()
+                    self._control_fade_anim.stop()
+                    self._title_opacity_effect.setOpacity(1.0)
+                    self._control_opacity_effect.setOpacity(1.0)
                     self.title_bar.show()
                     self.control_bar.show()
                     self.unsetCursor()
@@ -796,8 +850,8 @@ class VideoPlayer(QMainWindow):
     def handle_mouse_activity(self) -> None:
         if self.isFullScreen():
             self.unsetCursor()
-            self.title_bar.show()
-            self.control_bar.show()
+            self._fade_widget_in(self.title_bar, self._title_opacity_effect, self._title_fade_anim)
+            self._fade_widget_in(self.control_bar, self._control_opacity_effect, self._control_fade_anim)
             self.mouse_timer.start()
 
     def _hide_controls_on_timeout(self) -> None:
@@ -806,8 +860,8 @@ class VideoPlayer(QMainWindow):
             if self.control_bar.geometry().contains(pos) or self.title_bar.geometry().contains(pos):
                 self.mouse_timer.start()
                 return
-            self.title_bar.hide()
-            self.control_bar.hide()
+            self._fade_widget_out(self.title_bar, self._title_opacity_effect, self._title_fade_anim)
+            self._fade_widget_out(self.control_bar, self._control_opacity_effect, self._control_fade_anim)
             self.setCursor(Qt.CursorShape.BlankCursor)
 
     def resizeEvent(self, event) -> None:
@@ -830,6 +884,10 @@ class VideoPlayer(QMainWindow):
         elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             if self.isFullScreen():
                 self.showNormal()
+                self._title_fade_anim.stop()
+                self._control_fade_anim.stop()
+                self._title_opacity_effect.setOpacity(1.0)
+                self._control_opacity_effect.setOpacity(1.0)
                 self.title_bar.show()
                 self.control_bar.show()
                 self.unsetCursor()
@@ -848,6 +906,10 @@ class VideoPlayer(QMainWindow):
         elif key == Qt.Key.Key_Escape:
             if self.isFullScreen():
                 self.showNormal()
+                self._title_fade_anim.stop()
+                self._control_fade_anim.stop()
+                self._title_opacity_effect.setOpacity(1.0)
+                self._control_opacity_effect.setOpacity(1.0)
                 self.title_bar.show()
                 self.control_bar.show()
                 self.unsetCursor()
