@@ -405,6 +405,14 @@ class VideoPlayer(QMainWindow):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.Yes,
             )
+            # The dialog above is modal but still re-enters the Qt event loop,
+            # so another load_video() call (drag-drop, recent file, double-open)
+            # may have swapped in a different file while we were waiting for
+            # the user's answer. If that happened, applying the saved position
+            # or restoring pause state now would corrupt playback of the new
+            # file, so bail out instead.
+            if self.current_media_path != path:
+                return
             if answer == QMessageBox.StandardButton.Yes:
                 self.player.time_pos = saved
                 self.player.pause = False

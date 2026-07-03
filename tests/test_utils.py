@@ -129,6 +129,22 @@ class UtilsTest(unittest.TestCase):
         self.assertIn("Hello", srt)
         self.assertNotIn("Konnichiwa", srt)
 
+    def test_convert_multilingual_smi_handles_extra_attributes_after_class(self):
+        # Real-world SMI files sometimes have extra attributes after Class=..., e.g.
+        # <P Class=KRCC Style=xyz>. The Korean-priority match must not require '>'
+        # immediately after the class value, or it silently falls back to the
+        # wrong (first) language track.
+        smi = (
+            "<SAMI><BODY>\n"
+            "<SYNC Start=1000>\n"
+            "  <P Class=KRCC Style=xyz>안녕하세요\n"
+            "  <P Class=ENCC>Hello\n"
+            "</BODY></SAMI>"
+        )
+        srt = convert_smi_to_srt_text(smi)
+        self.assertIn("안녕하세요", srt)
+        self.assertNotIn("Hello", srt)
+
     def test_convert_multilingual_smi_supports_quotes(self):
         smi = (
             "<SAMI><BODY>\n"
