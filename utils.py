@@ -85,11 +85,14 @@ def find_matching_image(media_path: str) -> str | None:
 
 def normalize_recent_files(paths: Iterable[str] | None, new_path: str | None = None, limit: int = 5) -> list[str]:
     result: list[str] = []
+    seen: set[str] = set()
     if new_path:
         result.append(new_path)
+        seen.add(os.path.normcase(new_path))
     for path in paths or []:
-        if path and path not in result and os.path.exists(path):
+        if path and os.path.normcase(path) not in seen and os.path.exists(path):
             result.append(path)
+            seen.add(os.path.normcase(path))
         if len(result) >= limit:
             break
     return result

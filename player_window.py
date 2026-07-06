@@ -369,7 +369,7 @@ class VideoPlayer(QMainWindow):
         return bool(self.current_media_path)
 
     def _setting_key_for_path(self, path: str) -> str:
-        return "positions/" + hashlib.sha256(path.encode("utf-8")).hexdigest()
+        return "positions/" + hashlib.sha256(os.path.normcase(path).encode("utf-8")).hexdigest()
 
     def _save_current_position(self):
         if not self.has_video():
@@ -945,7 +945,13 @@ class VideoPlayer(QMainWindow):
     def closeEvent(self, event):
         self._save_current_position()
         self.settings.setValue("volume", self.vol_slider.value())
-        
+
+        if hasattr(self, "export_process") and self.export_process and self.export_process.state() != QProcess.ProcessState.NotRunning:
+            self._closing = True
+            self.export_cancelled = True
+            self.export_process.kill()
+            self.export_process.waitForFinished(3000)
+
         if self.video_container and isinstance(self.video_container, MpvGLWidget):
             try:
                 self.video_container.shutdown()
@@ -1179,9 +1185,15 @@ class VideoPlayer(QMainWindow):
                     pass
 
     def _handle_export_finished(self, exit_code, exit_status):
+        if getattr(self, "_closing", False):
+            return
         self.export_dialog.close()
         if self.export_cancelled:
             _ = QMessageBox.information(self, "Export Cancelled", "Video export was cancelled by the user.")
+            return
+
+        if getattr(self, "_export_error_shown", False):
+            self._export_error_shown = False
             return
 
         if exit_status == QProcess.ExitStatus.NormalExit and exit_code == 0:
@@ -1195,6 +1207,8 @@ class VideoPlayer(QMainWindow):
             )
 
     def _handle_export_error(self, error):
+        if getattr(self, "_closing", False):
+            return
         if hasattr(self, "export_dialog") and self.export_dialog.wasCanceled():
             return
         if hasattr(self, "export_dialog"):
@@ -1209,4 +1223,5 @@ class VideoPlayer(QMainWindow):
             QProcess.ProcessError.UnknownError: "An unknown process error occurred."
         }
         msg = error_msgs.get(error, "An error occurred running FFmpeg.")
+        self._export_error_shown = True
         _ = QMessageBox.critical(self, "Export Error", msg)

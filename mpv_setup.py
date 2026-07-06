@@ -110,7 +110,7 @@ def find_libmpv_dir() -> str | None:
         candidates += ["/opt/homebrew/lib", "/usr/local/lib"]
         libnames = ["libmpv.dylib", "libmpv.2.dylib", "libmpv.1.dylib"]
     else:
-        candidates += ["/usr/lib", "/usr/local/lib", "/usr/lib/x86_64-linux-gnu", "/usr/lib64"]
+        candidates += ["/usr/lib", "/usr/local/lib", "/usr/lib/x86_64-linux-gnu", "/usr/lib/aarch64-linux-gnu", "/usr/lib64"]
         libnames = ["libmpv.so", "libmpv.so.2", "libmpv.so.1"]
 
     for directory in candidates:
