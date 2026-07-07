@@ -1,5 +1,6 @@
 import sys
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from file_association import register_file_associations
@@ -53,7 +54,8 @@ def main() -> int:
     player.show()
 
     if len(sys.argv) > 1:
-        player.load_video(sys.argv[1])
+        file_path = sys.argv[1]
+        QTimer.singleShot(100, player, lambda: player.load_video(file_path))
 
     return app.exec()
 
