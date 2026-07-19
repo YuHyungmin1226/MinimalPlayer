@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import hashlib
 import os
 import subprocess
@@ -107,7 +109,7 @@ def find_libmpv_dir() -> str | None:
                 candidates.append(os.path.join(prefix, "lib"))
         except Exception:
             pass
-        candidates += ["/opt/homebrew/lib", "/usr/local/lib"]
+        candidates += ["/opt/homebrew/lib", "/usr/local/lib", os.path.expanduser("~/.homebrew/lib")]
         libnames = ["libmpv.dylib", "libmpv.2.dylib", "libmpv.1.dylib"]
     else:
         candidates += ["/usr/lib", "/usr/local/lib", "/usr/lib/x86_64-linux-gnu", "/usr/lib/aarch64-linux-gnu", "/usr/lib64"]

@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import hashlib
 import locale
 import os
 import sys
 import importlib
 import shutil
+import subprocess
 from typing import Any, cast
 
 from PySide6.QtCore import QEasingCurve, QEvent, QPropertyAnimation, QSettings, Qt, QTimer, Signal, QProcess
@@ -141,7 +144,7 @@ STYLE = (
     "#TitleBar { background-color: #1e1e1e; border-bottom: 1px solid #333; }"
     "#ControlBar { background-color: rgba(30, 30, 30, 220); border-top: 1px solid #333; }"
     "QPushButton { background: transparent; color: #eee; border: none; "
-    "font-family: 'Segoe UI', 'Helvetica Neue', 'Arial', sans-serif; font-size: 14px; padding: 5px; outline: none; }"
+    "font-size: 14px; padding: 5px; outline: none; }"
     "QPushButton:hover { background-color: rgba(255, 255, 255, 0.1); }"
     "QPushButton:pressed { background-color: rgba(255, 255, 255, 0.2); }"
     "QPushButton:focus { background: transparent; }"
@@ -194,6 +197,7 @@ class VideoPlayer(QMainWindow):
 
         self.converted_subtitle_paths: list[str] = []
         self.temp_files_to_clean = set()
+        self.export_temp_paths: set[str] = set()
 
         saved_vol = self.settings.value("volume", DEFAULT_VOLUME, type=int)
         self.vol_slider.setValue(saved_vol)
@@ -382,7 +386,7 @@ class VideoPlayer(QMainWindow):
         if pos > RESUME_THRESHOLD_SECONDS and (duration == 0 or pos < duration - 5):
             self.settings.setValue(self._setting_key_for_path(str(self.current_media_path)), pos)
 
-    def _maybe_resume(self, path):
+    def _maybe_resume(self, path, attempts_remaining: int = 50):
         if getattr(self, "_is_resuming", False):
             return
         try:
@@ -394,7 +398,12 @@ class VideoPlayer(QMainWindow):
 
             duration = self.player.duration
             if duration is None or duration <= 0:
-                QTimer.singleShot(100, self, lambda: self._maybe_resume(path))
+                if attempts_remaining > 0:
+                    QTimer.singleShot(
+                        100,
+                        self,
+                        lambda: self._maybe_resume(path, attempts_remaining - 1),
+                    )
                 return
 
             self._is_resuming = True
@@ -469,6 +478,10 @@ class VideoPlayer(QMainWindow):
             except OSError:
                 pass
         self.converted_subtitle_paths = []
+
+    def _cleanup_export_temp_paths(self) -> None:
+        self._cleanup_paths(list(self.export_temp_paths))
+        self.export_temp_paths.clear()
 
     def _subtitle_path_for_player(self, subtitle_path: str) -> str:
         _, ext = os.path.splitext(subtitle_path)
@@ -943,6 +956,10 @@ class VideoPlayer(QMainWindow):
         super().mouseReleaseEvent(event)
 
     def closeEvent(self, event):
+        if hasattr(self, "timer"):
+            self.timer.stop()
+        if hasattr(self, "mouse_timer"):
+            self.mouse_timer.stop()
         self._save_current_position()
         self.settings.setValue("volume", self.vol_slider.value())
 
@@ -965,6 +982,7 @@ class VideoPlayer(QMainWindow):
                 pass
 
         self._cleanup_converted_subtitles()
+        self._cleanup_export_temp_paths()
         for path in list(self.temp_files_to_clean):
             try:
                 if os.path.exists(path):
@@ -1076,8 +1094,11 @@ class VideoPlayer(QMainWindow):
             )
             return
 
+        self._cleanup_export_temp_paths()
+
         # 1. Verify FFmpeg installation
-        if not shutil.which("ffmpeg"):
+        ffmpeg_path = self._find_ffmpeg()
+        if not ffmpeg_path:
             _ = QMessageBox.critical(
                 self,
                 "FFmpeg Required",
@@ -1117,17 +1138,29 @@ class VideoPlayer(QMainWindow):
 
         # 4. Check for subtitles
         sub_path = find_matching_subtitle(self.current_media_path)
+        if sub_path and not self._ffmpeg_has_filter(ffmpeg_path, "subtitles"):
+            _ = QMessageBox.critical(
+                self,
+                "FFmpeg Subtitle Support Required",
+                "The installed FFmpeg does not include the subtitles filter required to burn subtitles.\n\n"
+                "macOS: install the full build with 'brew install ffmpeg-full'.\n"
+                "Windows: install a full FFmpeg build that includes libass.",
+            )
+            return
 
         # 5. Build FFmpeg command arguments
         args = ["-y"]
         args += ["-loop", "1", "-i", image_path]
         args += ["-i", self.current_media_path]
 
-        vf_filters = []
+        vf_filters = ["scale=trunc(iw/2)*2:trunc(ih/2)*2"]
         if sub_path:
             srt_path = self._subtitle_path_for_player(sub_path)
+            if srt_path != sub_path:
+                self.converted_subtitle_paths.remove(srt_path)
+                self.export_temp_paths.add(srt_path)
             escaped_sub = self._escape_ffmpeg_path(srt_path)
-            vf_filters.append(f"subtitles='{escaped_sub}'")
+            vf_filters.append(f"subtitles=filename='{escaped_sub}'")
 
         if vf_filters:
             args += ["-vf", ",".join(vf_filters)]
@@ -1157,7 +1190,62 @@ class VideoPlayer(QMainWindow):
         self.export_process.readyReadStandardOutput.connect(self._handle_export_progress)
         self.export_process.errorOccurred.connect(self._handle_export_error)
         self.export_process.finished.connect(self._handle_export_finished)
-        self.export_process.start("ffmpeg", args)
+        self.export_process.start(ffmpeg_path, args)
+
+    def _find_ffmpeg(self) -> str | None:
+        candidates: list[str] = []
+        if IS_MAC:
+            brew_candidates = [
+                shutil.which("brew"),
+                "/opt/homebrew/bin/brew",
+                "/usr/local/bin/brew",
+                os.path.expanduser("~/.homebrew/bin/brew"),
+            ]
+            brew = next(
+                (path for path in brew_candidates if path and os.path.isfile(path) and os.access(path, os.X_OK)),
+                None,
+            )
+            if brew:
+                try:
+                    prefix = subprocess.check_output(
+                        [brew, "--prefix", "ffmpeg-full"],
+                        text=True,
+                        stderr=subprocess.DEVNULL,
+                    ).strip()
+                    candidates.append(os.path.join(prefix, "bin", "ffmpeg"))
+                except (OSError, subprocess.CalledProcessError):
+                    pass
+            candidates.extend(
+                [
+                    "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg",
+                    "/usr/local/opt/ffmpeg-full/bin/ffmpeg",
+                    os.path.expanduser("~/.homebrew/opt/ffmpeg-full/bin/ffmpeg"),
+                    "/opt/homebrew/bin/ffmpeg",
+                    "/usr/local/bin/ffmpeg",
+                    os.path.expanduser("~/.homebrew/bin/ffmpeg"),
+                ]
+            )
+        system_ffmpeg = shutil.which("ffmpeg")
+        if system_ffmpeg:
+            candidates.append(system_ffmpeg)
+        return next((path for path in candidates if os.path.isfile(path) and os.access(path, os.X_OK)), None)
+
+    def _ffmpeg_has_filter(self, ffmpeg_path: str, filter_name: str) -> bool:
+        try:
+            result = subprocess.run(
+                [ffmpeg_path, "-hide_banner", "-filters"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return any(
+            len(parts) >= 2 and parts[1] == filter_name
+            for line in result.stdout.splitlines()
+            if (parts := line.split())
+        )
 
     def _escape_ffmpeg_path(self, path: str) -> str:
         path = path.replace("\\", "/")
@@ -1186,8 +1274,10 @@ class VideoPlayer(QMainWindow):
 
     def _handle_export_finished(self, exit_code, exit_status):
         if getattr(self, "_closing", False):
+            self._cleanup_export_temp_paths()
             return
         self.export_dialog.close()
+        self._cleanup_export_temp_paths()
         if self.export_cancelled:
             _ = QMessageBox.information(self, "Export Cancelled", "Video export was cancelled by the user.")
             return
@@ -1208,11 +1298,13 @@ class VideoPlayer(QMainWindow):
 
     def _handle_export_error(self, error):
         if getattr(self, "_closing", False):
+            self._cleanup_export_temp_paths()
             return
         if hasattr(self, "export_dialog") and self.export_dialog.wasCanceled():
             return
         if hasattr(self, "export_dialog"):
             self.export_dialog.close()
+        self._cleanup_export_temp_paths()
 
         error_msgs = {
             QProcess.ProcessError.FailedToStart: "FFmpeg executable not found. Make sure ffmpeg is in your system PATH.",

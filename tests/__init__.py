@@ -1,0 +1,1 @@
+"""MinimalPlayer test package."""
