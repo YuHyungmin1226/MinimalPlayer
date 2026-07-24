@@ -418,6 +418,20 @@ class VideoPlayer(QMainWindow):
             dialog.setWindowTitle("Resume Playback")
             dialog.setText("Continue from where you left off?")
             dialog.setInformativeText(f"Saved position: {format_time(saved)}")
+            dialog.setStyleSheet(
+                "QMessageBox QPushButton {"
+                " background-color: #f2f2f2;"
+                " color: #111;"
+                " border: 1px solid #999;"
+                " border-radius: 4px;"
+                " min-width: 72px;"
+                " min-height: 28px;"
+                " padding: 2px 12px;"
+                "}"
+                "QMessageBox QPushButton:hover { background-color: #e2e2e2; }"
+                "QMessageBox QPushButton:pressed { background-color: #d2d2d2; }"
+                "QMessageBox QPushButton:default { border: 2px solid #3578e5; }"
+            )
             resume_button = dialog.addButton("YES", QMessageBox.ButtonRole.AcceptRole)
             dialog.addButton("NO", QMessageBox.ButtonRole.RejectRole)
             dialog.setDefaultButton(resume_button)
