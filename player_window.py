@@ -418,8 +418,8 @@ class VideoPlayer(QMainWindow):
             dialog.setWindowTitle("Resume Playback")
             dialog.setText("Continue from where you left off?")
             dialog.setInformativeText(f"Saved position: {format_time(saved)}")
-            resume_button = dialog.addButton("Resume", QMessageBox.ButtonRole.AcceptRole)
-            dialog.addButton("Start Over", QMessageBox.ButtonRole.RejectRole)
+            resume_button = dialog.addButton("YES", QMessageBox.ButtonRole.AcceptRole)
+            dialog.addButton("NO", QMessageBox.ButtonRole.RejectRole)
             dialog.setDefaultButton(resume_button)
             dialog.exec()
             # The dialog above is modal but still re-enters the Qt event loop,
