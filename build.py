@@ -2,11 +2,15 @@ import PyInstaller.__main__
 import os
 import sys
 import glob
+import plistlib
 import subprocess
+
+from constants import AUDIO_EXTENSIONS, VIDEO_EXTENSIONS
 
 # Build configuration
 ENTRY_POINT = "main.py"
 APP_NAME = "MinimalPlayer"
+BUNDLE_IDENTIFIER = "com.yuhyungmin.minimalplayer"
 
 IS_WINDOWS = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"
@@ -60,6 +64,40 @@ def _verify_macos_bundle(app_path):
         print("OK: no external (Homebrew/MacPorts) dependencies — the .app is self-contained.")
 
 
+def _configure_macos_file_associations(app_path):
+    """Declare supported media types so Finder can route files to the app."""
+    plist_path = os.path.join(app_path, "Contents", "Info.plist")
+    with open(plist_path, "rb") as plist_file:
+        info = plistlib.load(plist_file)
+
+    info["CFBundleIdentifier"] = BUNDLE_IDENTIFIER
+    info["CFBundleDocumentTypes"] = [
+        {
+            "CFBundleTypeName": "Video",
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Owner",
+            "LSItemContentTypes": ["public.movie"],
+            "CFBundleTypeExtensions": sorted(ext.lstrip(".") for ext in VIDEO_EXTENSIONS),
+        },
+        {
+            "CFBundleTypeName": "Audio",
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Owner",
+            "LSItemContentTypes": ["public.audio"],
+            "CFBundleTypeExtensions": sorted(ext.lstrip(".") for ext in AUDIO_EXTENSIONS),
+        },
+    ]
+
+    with open(plist_path, "wb") as plist_file:
+        plistlib.dump(info, plist_file, sort_keys=False)
+
+    subprocess.run(
+        ["codesign", "--force", "--deep", "--sign", "-", app_path],
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+
+
 def build():
     print(f"Starting build for {APP_NAME} on {sys.platform}...")
 
@@ -71,6 +109,8 @@ def build():
         "--clean",
         "--hidden-import=mpv",
     ]
+    if IS_MAC:
+        params.append("--osx-bundle-identifier=" + BUNDLE_IDENTIFIER)
 
     # PyInstaller uses ';' as the add-binary separator on Windows and ':' elsewhere.
     sep = ";" if IS_WINDOWS else ":"
@@ -105,6 +145,7 @@ def build():
 
     if IS_MAC:
         app_path = os.path.join("dist", f"{APP_NAME}.app")
+        _configure_macos_file_associations(app_path)
         print()
         _verify_macos_bundle(app_path)
         print(f"\nBuild complete! Check '{app_path}'.")
