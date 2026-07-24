@@ -375,6 +375,9 @@ class VideoPlayer(QMainWindow):
     def _setting_key_for_path(self, path: str) -> str:
         return "positions/" + hashlib.sha256(os.path.normcase(path).encode("utf-8")).hexdigest()
 
+    def _clear_saved_position(self, path: str) -> None:
+        self.settings.remove(self._setting_key_for_path(path))
+
     def _save_current_position(self):
         if not self.has_video():
             return
@@ -385,6 +388,8 @@ class VideoPlayer(QMainWindow):
             return
         if pos > RESUME_THRESHOLD_SECONDS and (duration == 0 or pos < duration - 5):
             self.settings.setValue(self._setting_key_for_path(str(self.current_media_path)), pos)
+        elif duration > 0 and pos >= duration - 5:
+            self._clear_saved_position(str(self.current_media_path))
 
     def _maybe_resume(self, path, attempts_remaining: int = 50):
         if getattr(self, "_is_resuming", False):
@@ -407,15 +412,16 @@ class VideoPlayer(QMainWindow):
                 return
 
             self._is_resuming = True
-            was_paused = self.player.pause
             self.player.pause = True
-            answer = QMessageBox.question(
-                self,
-                "Resume Playback",
-                f"Resume from {format_time(saved)}?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes,
-            )
+            dialog = QMessageBox(self)
+            dialog.setIcon(QMessageBox.Icon.Question)
+            dialog.setWindowTitle("Resume Playback")
+            dialog.setText("Continue from where you left off?")
+            dialog.setInformativeText(f"Saved position: {format_time(saved)}")
+            resume_button = dialog.addButton("Resume", QMessageBox.ButtonRole.AcceptRole)
+            dialog.addButton("Start Over", QMessageBox.ButtonRole.RejectRole)
+            dialog.setDefaultButton(resume_button)
+            dialog.exec()
             # The dialog above is modal but still re-enters the Qt event loop,
             # so another load_video() call (drag-drop, recent file, double-open)
             # may have swapped in a different file while we were waiting for
@@ -424,12 +430,15 @@ class VideoPlayer(QMainWindow):
             # file, so bail out instead.
             if self.current_media_path != path:
                 return
-            if answer == QMessageBox.StandardButton.Yes:
+            if dialog.clickedButton() is resume_button:
                 self.player.time_pos = saved
                 self.player.pause = False
                 self.media_ended = False
             else:
-                self.player.pause = was_paused
+                self._clear_saved_position(path)
+                self.player.time_pos = 0
+                self.player.pause = False
+                self.media_ended = False
         except Exception as e:
             print(f"Error in resume playback check: {e}")
         finally:
@@ -610,6 +619,8 @@ class VideoPlayer(QMainWindow):
             if duration is not None and duration > 0:
                 if (eof_reached or (idle_active and time_pos is None)):
                     self.media_ended = True
+                    if self.current_media_path:
+                        self._clear_saved_position(self.current_media_path)
                     self.seek_slider.setMaximum(self.last_duration)
                     self.seek_slider.setValue(self.last_duration)
                     self.time_label.setText(f"{format_time(self.last_duration)} / {format_time(self.last_duration)}")
