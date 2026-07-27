@@ -1,11 +1,12 @@
 import PyInstaller.__main__
+import hashlib
 import os
 import sys
 import glob
 import plistlib
 import subprocess
 
-from constants import AUDIO_EXTENSIONS, VIDEO_EXTENSIONS
+from constants import AUDIO_EXTENSIONS, MPV_DLL_NAME, MPV_DLL_SHA256, VIDEO_EXTENSIONS
 
 # Build configuration
 ENTRY_POINT = "main.py"
@@ -14,6 +15,18 @@ BUNDLE_IDENTIFIER = "com.yuhyungmin.minimalplayer"
 
 IS_WINDOWS = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"
+
+
+def _sha256_file(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest().upper()
+
+
+def _verify_mpv_dll(path: str) -> bool:
+    return os.path.exists(path) and _sha256_file(path) == MPV_DLL_SHA256
 
 
 def _find_macos_libmpv():
@@ -118,8 +131,13 @@ def build():
     if IS_WINDOWS:
         # Single-file portable executable for Windows.
         params.append("--onefile")
-        dll_name = "mpv-1.dll"
+        dll_name = MPV_DLL_NAME
         if os.path.exists(dll_name):
+            if not _verify_mpv_dll(dll_name):
+                print(f"ERROR: {dll_name} exists but failed SHA256 verification.")
+                print("Remove it to build an executable that downloads a verified DLL on first run,")
+                print("or replace it with the expected release asset before building.")
+                sys.exit(1)
             params.append(f"--add-binary={dll_name}{sep}.")
         else:
             print(f"Warning: {dll_name} not found in the project root.")

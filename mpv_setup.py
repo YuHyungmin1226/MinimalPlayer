@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import urllib.request
+from collections.abc import Callable
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox, QProgressDialog
@@ -18,6 +19,12 @@ IS_LINUX = sys.platform.startswith("linux")
 
 BASE_DIR = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
 
+# Keep Windows DLL directory handles alive for the lifetime of the process.
+# The object returned by os.add_dll_directory() removes the directory from the
+# loader search path when it is closed or garbage-collected, so dropping it can
+# make mpv-1.dll intermittently fail to load in packaged Windows builds.
+_DLL_DIRECTORY_HANDLES: list[object] = []
+
 
 def sha256_file(path: str) -> str:
     digest = hashlib.sha256()
@@ -29,6 +36,21 @@ def sha256_file(path: str) -> str:
 
 def verify_mpv_dll(path: str) -> bool:
     return os.path.exists(path) and sha256_file(path) == MPV_DLL_SHA256
+
+
+def _prepend_to_path(directory: str) -> None:
+    existing = os.environ.get("PATH", "")
+    os.environ["PATH"] = directory + (os.pathsep + existing if existing else "")
+
+
+def _add_windows_dll_directory(directory: str) -> None:
+    add_dll_directory: Callable[[str], object] | None = getattr(os, "add_dll_directory", None)
+    if add_dll_directory is None or not os.path.isdir(directory):
+        return
+    try:
+        _DLL_DIRECTORY_HANDLES.append(add_dll_directory(directory))
+    except OSError:
+        pass
 
 
 def check_and_download_mpv():
@@ -126,14 +148,11 @@ def prepare_mpv_library():
     if IS_WINDOWS:
         meipass = getattr(sys, "_MEIPASS", None)
         if meipass and os.path.exists(os.path.join(meipass, MPV_DLL_NAME)):
-            os.environ["PATH"] = meipass + os.pathsep + os.environ["PATH"]
+            _prepend_to_path(meipass)
+            _add_windows_dll_directory(meipass)
             return
-        os.environ["PATH"] = BASE_DIR + os.pathsep + os.environ["PATH"]
-        if hasattr(os, "add_dll_directory"):
-            try:
-                os.add_dll_directory(BASE_DIR)
-            except Exception:
-                pass
+        _prepend_to_path(BASE_DIR)
+        _add_windows_dll_directory(BASE_DIR)
         check_and_download_mpv()
         return
 
