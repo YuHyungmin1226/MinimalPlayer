@@ -39,7 +39,7 @@ from constants import (
 )
 from file_association import register_file_associations
 from mpv_setup import IS_LINUX, IS_MAC, IS_WINDOWS
-from utils import convert_smi_file_to_temp_srt, convert_subtitle_to_utf8, find_matching_image, find_matching_subtitle, format_time, is_supported_audio, is_supported_media, normalize_recent_files
+from utils import convert_smi_file_to_temp_srt, convert_subtitle_to_utf8, find_adjacent_media_in_folder, find_matching_image, find_matching_subtitle, find_next_media_in_folder, find_previous_media_in_folder, format_time, is_supported_audio, is_supported_media, normalize_recent_files
 
 mpv = cast(Any, importlib.import_module("mpv"))
 
@@ -148,6 +148,7 @@ STYLE = (
     "QPushButton:hover { background-color: rgba(255, 255, 255, 0.1); }"
     "QPushButton:pressed { background-color: rgba(255, 255, 255, 0.2); }"
     "QPushButton:focus { background: transparent; }"
+    "QPushButton:disabled { color: #555; background: transparent; }"
     "QSlider::groove:horizontal { border: 1px solid #444; height: 4px; background: #222; margin: 2px 0; }"
     "QSlider::handle:horizontal { background: #888; border: 1px solid #888; width: 14px; height: 14px; "
     "margin: -5px 0; border-radius: 7px; }"
@@ -182,6 +183,10 @@ class VideoPlayer(QMainWindow):
         self._drag_pos = None
         self._audio_pixmap: QPixmap = None
         self._audio_subtitle_on = False
+        # 재생이 실제로 진행된 파일에 대해서만 EOF 자동 넘김을 허용하기 위한 플래그.
+        # loadfile() 직후 mpv가 이전 파일의 eof-reached를 잠시 더 보고할 수 있는데,
+        # 이 플래그가 없으면 그 값을 보고 폴더 전체를 순식간에 건너뛰게 됩니다.
+        self._eof_armed = False
         
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.resize(1000, 600)
@@ -201,6 +206,8 @@ class VideoPlayer(QMainWindow):
 
         saved_vol = self.settings.value("volume", DEFAULT_VOLUME, type=int)
         self.vol_slider.setValue(saved_vol)
+
+        self._auto_advance_enabled = bool(self.settings.value("autoAdvance", True, type=bool))
 
         self.timer = QTimer(self)
         self.timer.setInterval(100)
@@ -310,6 +317,14 @@ class VideoPlayer(QMainWindow):
         self.open_btn.clicked.connect(self.open_file_dialog)
         self.btns_layout.addWidget(self.open_btn)
 
+        self.prev_btn = QPushButton("|<")
+        self.prev_btn.setFixedSize(45, 35)
+        self.prev_btn.setToolTip("Previous File in Folder")
+        self.prev_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.prev_btn.setEnabled(False)
+        self.prev_btn.clicked.connect(self.play_previous_in_folder)
+        self.btns_layout.addWidget(self.prev_btn)
+
         self.back_btn = QPushButton("<<")
         self.back_btn.setFixedSize(45, 35)
         self.back_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -327,6 +342,14 @@ class VideoPlayer(QMainWindow):
         self.fwd_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.fwd_btn.clicked.connect(lambda: self.skip(10))
         self.btns_layout.addWidget(self.fwd_btn)
+
+        self.next_btn = QPushButton(">|")
+        self.next_btn.setFixedSize(45, 35)
+        self.next_btn.setToolTip("Next File in Folder")
+        self.next_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.next_btn.setEnabled(False)
+        self.next_btn.clicked.connect(self.play_next_in_folder)
+        self.btns_layout.addWidget(self.next_btn)
 
         self.time_label = QLabel("00:00 / 00:00")
         self.time_label.setFixedHeight(35)
@@ -640,10 +663,15 @@ class VideoPlayer(QMainWindow):
                     self.time_label.setText(f"{format_time(self.last_duration)} / {format_time(self.last_duration)}")
                     if self.play_btn.text() != "Play":
                         self.play_btn.setText("Play")
+                    if self._eof_armed:
+                        self._eof_armed = False
+                        self._request_auto_advance()
                     return
 
             if time_pos is not None:
                 self.media_ended = False
+                if not eof_reached and self.current_media_path:
+                    self._eof_armed = True
                 curr = int(time_pos)
                 total = self.last_duration if self.last_duration > 0 else int(duration or 0)
                 
@@ -688,7 +716,12 @@ class VideoPlayer(QMainWindow):
         if file_path:
             QTimer.singleShot(100, self, lambda: self.load_video(file_path))
 
-    def load_video(self, path):
+    def load_video(self, path, ask_resume: bool = True):
+        """파일을 로드해 재생합니다.
+
+        ask_resume=False는 폴더 순차 이동(자동 넘김, 이전/다음 버튼)에서 사용합니다.
+        연속 재생 중에 모달 이어보기 대화상자가 뜨면 재생이 멈춰버리기 때문입니다.
+        """
         if not self.player:
             return
         if getattr(self, "_is_loading", False):
@@ -709,6 +742,7 @@ class VideoPlayer(QMainWindow):
             self.converted_subtitle_paths = []
             self.current_media_path = os.path.abspath(path)
             self.media_ended = False
+            self._eof_armed = False
             self.last_time_pos = 0
             self.last_duration = 0
 
@@ -769,9 +803,78 @@ class VideoPlayer(QMainWindow):
             self.setFocus()
 
             QTimer.singleShot(1000, self, lambda: self._cleanup_paths(old_paths))
-            QTimer.singleShot(500, self, lambda path=self.current_media_path: self._maybe_resume(path))
+            if ask_resume:
+                QTimer.singleShot(500, self, lambda path=self.current_media_path: self._maybe_resume(path))
         finally:
             self._is_loading = False
+            self._update_nav_buttons()
+
+    def _update_nav_buttons(self) -> None:
+        prev_path = next_path = None
+        if self.current_media_path:
+            try:
+                prev_path, next_path = find_adjacent_media_in_folder(self.current_media_path)
+            except Exception as e:
+                print(f"Error scanning the folder for adjacent files: {e}")
+        self.prev_btn.setEnabled(prev_path is not None)
+        self.next_btn.setEnabled(next_path is not None)
+
+    def play_previous_in_folder(self) -> None:
+        self._play_sibling(find_previous_media_in_folder)
+
+    def play_next_in_folder(self) -> None:
+        self._play_sibling(find_next_media_in_folder)
+
+    def _play_sibling(self, finder) -> None:
+        """폴더 내 이웃 파일로 이동합니다(수동 조작이므로 자동 넘김 설정과 무관).
+
+        버튼 활성화 상태는 로드 시점 기준이라 재생 중 폴더가 바뀌었을 수 있어,
+        클릭 시점에 다시 스캔합니다.
+        """
+        if not self.current_media_path:
+            return
+        try:
+            target = finder(self.current_media_path)
+        except Exception as e:
+            print(f"Error finding the adjacent media file: {e}")
+            return
+        if not target:
+            self._update_nav_buttons()
+            return
+        self.load_video(target, ask_resume=False)
+
+    def set_auto_advance_enabled(self, enabled: bool) -> None:
+        self._auto_advance_enabled = bool(enabled)
+        self.settings.setValue("autoAdvance", self._auto_advance_enabled)
+
+    def _request_auto_advance(self) -> None:
+        """재생이 끝나면 같은 폴더의 다음 파일을 예약합니다.
+
+        update_status()는 100ms 타이머 슬롯이고 load_video()는 모달 대화상자를
+        띄울 수 있으므로, 실제 로드는 singleShot(0)으로 현재 슬롯 밖에서 실행합니다.
+        """
+        if not self._auto_advance_enabled:
+            return
+        if getattr(self, "_is_loading", False) or getattr(self, "_is_resuming", False):
+            return
+        current = self.current_media_path
+        if not current:
+            return
+        try:
+            next_path = find_next_media_in_folder(current)
+        except Exception as e:
+            print(f"Error finding the next media file: {e}")
+            return
+        if not next_path:
+            return
+        QTimer.singleShot(0, self, lambda: self._play_next_if_unchanged(current, next_path))
+
+    def _play_next_if_unchanged(self, expected_path: str, next_path: str) -> None:
+        # 예약과 실행 사이에 사용자가 다른 파일을 열었거나 다시 재생을 시작했다면
+        # 자동 넘김을 포기합니다.
+        if self.current_media_path != expected_path or not self.media_ended:
+            return
+        self.load_video(next_path, ask_resume=False)
 
     def _set_audio_image(self, image_path: str | None) -> None:
         if image_path:
@@ -915,6 +1018,10 @@ class VideoPlayer(QMainWindow):
             self.skip(-5)
         elif key == Qt.Key.Key_Right:
             self.skip(5)
+        elif key == Qt.Key.Key_PageUp:
+            self.play_previous_in_folder()
+        elif key == Qt.Key.Key_PageDown:
+            self.play_next_in_folder()
         elif key == Qt.Key.Key_Up:
             self.set_volume(self.vol_slider.value() + 5, show_osd=True)
         elif key == Qt.Key.Key_Down:
@@ -1036,6 +1143,12 @@ class VideoPlayer(QMainWindow):
         open_action = QAction("Open File...", self)
         open_action.triggered.connect(self.open_file_dialog)
         menu.addAction(open_action)
+
+        auto_advance_action = QAction("Autoplay Next in Folder", self)
+        auto_advance_action.setCheckable(True)
+        auto_advance_action.setChecked(self._auto_advance_enabled)
+        auto_advance_action.toggled.connect(self.set_auto_advance_enabled)
+        menu.addAction(auto_advance_action)
 
         # WAV/Audio to Video Export Option
         if self.current_media_path and is_supported_audio(self.current_media_path):
@@ -1210,6 +1323,9 @@ class VideoPlayer(QMainWindow):
         self.export_dialog.show()
 
         # 7. Start QProcess
+        # 진행률 기준 길이는 시작 시점에 고정합니다. 내보내는 동안 자동 넘김이나
+        # 드래그 앤 드롭으로 다른 파일이 로드되면 self.last_duration이 바뀌기 때문입니다.
+        self._export_total_seconds = self.last_duration
         self.export_cancelled = False
         self.export_process = QProcess(self)
         self.export_process.readyReadStandardOutput.connect(self._handle_export_progress)
@@ -1291,8 +1407,9 @@ class VideoPlayer(QMainWindow):
                 try:
                     us = int(line.split("=")[1])
                     current_sec = us / 1000000.0
-                    if self.last_duration > 0:
-                        pct = min(100, max(0, int((current_sec / self.last_duration) * 100)))
+                    total = getattr(self, "_export_total_seconds", 0) or self.last_duration
+                    if total > 0:
+                        pct = min(100, max(0, int((current_sec / total) * 100)))
                         self.export_dialog.setValue(pct)
                 except ValueError:
                     pass

@@ -85,6 +85,88 @@ def find_matching_image(media_path: str) -> str | None:
     return None
 
 
+_NATURAL_CHUNK_RE = re.compile(r"(\d+)")
+
+
+def natural_sort_key(name: str) -> tuple:
+    """파일명을 탐색기/Finder와 비슷한 자연 정렬 순서로 비교하기 위한 키.
+
+    숫자 구간은 정수로 비교하므로 "track2 < track10"이 성립하고, 문자 구간은
+    대소문자를 무시합니다. 마지막에 원본 이름을 붙여 키가 같은 파일
+    (예: "a1.mp3" / "a01.mp3")도 결정적인 순서를 갖도록 합니다.
+    """
+    parts = _NATURAL_CHUNK_RE.split(name.casefold())
+    key = [(0, int(part), "") if index % 2 else (1, 0, part) for index, part in enumerate(parts)]
+    return (tuple(key), name)
+
+
+def list_media_files_in_folder(dir_path: str) -> list[str]:
+    """폴더 안의 지원 미디어 파일 경로를 자연 정렬 순서로 반환합니다.
+
+    숨김 파일은 제외합니다. exFAT/FAT USB 드라이브의 macOS AppleDouble 잔재
+    (`._track.mp3`)가 미디어 확장자를 갖고 있어 연속 재생을 막기 때문입니다.
+    """
+    dir_path = dir_path or "."
+    names: list[str] = []
+    try:
+        with os.scandir(dir_path) as entries:
+            for entry in entries:
+                if entry.name.startswith("."):
+                    continue
+                try:
+                    if not entry.is_file():
+                        continue
+                except OSError:
+                    continue
+                if is_supported_media(entry.name):
+                    names.append(entry.name)
+    except OSError:
+        return []
+    names.sort(key=natural_sort_key)
+    return [os.path.join(dir_path, name) for name in names]
+
+
+def find_adjacent_media_in_folder(current_path: str) -> tuple[str | None, str | None]:
+    """같은 폴더에서 파일명 순으로 (이전, 다음) 미디어 파일을 한 번에 찾습니다.
+
+    폴더의 처음/끝에서는 해당 방향이 None입니다(순환하지 않음).
+    현재 파일이 목록에 없으면(재생 중 삭제/이름 변경) 이름 순으로 그 앞뒤에
+    오는 파일을 반환합니다.
+
+    스캔이 한 번뿐이라, 버튼 활성화 상태를 갱신할 때 디스크를 두 번 읽지 않습니다.
+    """
+    dir_name, file_name = os.path.split(current_path)
+    if not dir_name:
+        dir_name = "."
+
+    paths = list_media_files_in_folder(dir_name)
+    if not paths:
+        return (None, None)
+
+    target = os.path.normcase(file_name)
+    for index, path in enumerate(paths):
+        if os.path.normcase(os.path.basename(path)) == target:
+            return (
+                paths[index - 1] if index > 0 else None,
+                paths[index + 1] if index + 1 < len(paths) else None,
+            )
+
+    current_key = natural_sort_key(file_name)
+    earlier = [path for path in paths if natural_sort_key(os.path.basename(path)) < current_key]
+    later = [path for path in paths if natural_sort_key(os.path.basename(path)) > current_key]
+    return (earlier[-1] if earlier else None, later[0] if later else None)
+
+
+def find_next_media_in_folder(current_path: str) -> str | None:
+    """같은 폴더에서 파일명 순으로 다음 순서의 미디어 파일을 찾습니다."""
+    return find_adjacent_media_in_folder(current_path)[1]
+
+
+def find_previous_media_in_folder(current_path: str) -> str | None:
+    """같은 폴더에서 파일명 순으로 이전 순서의 미디어 파일을 찾습니다."""
+    return find_adjacent_media_in_folder(current_path)[0]
+
+
 def normalize_recent_files(paths: Iterable[str] | None, new_path: str | None = None, limit: int = 5) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
