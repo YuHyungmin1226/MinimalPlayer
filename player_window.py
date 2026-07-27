@@ -158,6 +158,20 @@ STYLE = (
     "QMenu::item { background-color: transparent; padding: 6px 20px; }"
     "QMenu::item:selected { background-color: rgba(255, 255, 255, 0.1); }"
     "QMenu::separator { height: 1px; background: #333; margin: 4px 0; }"
+    # 대화상자는 배경색을 명시적으로 지정합니다. 지정하지 않으면 배경이 OS 테마를
+    # 따라가는데, 위의 전역 규칙이 상속되어 밝은 테마에서는 #eee 글자에 테두리도
+    # 없는 버튼이 흰 배경 위에 놓여 완전히 보이지 않게 됩니다.
+    "QMessageBox, QProgressDialog { background-color: #1e1e1e; }"
+    "QMessageBox QLabel, QProgressDialog QLabel { color: #eee; font-size: 13px; }"
+    "QMessageBox QPushButton, QProgressDialog QPushButton {"
+    " background-color: #2d2d2d; color: #eee; border: 1px solid #555;"
+    " border-radius: 4px; min-width: 72px; min-height: 28px; padding: 2px 12px; }"
+    "QMessageBox QPushButton:hover, QProgressDialog QPushButton:hover { background-color: #3a3a3a; }"
+    "QMessageBox QPushButton:pressed, QProgressDialog QPushButton:pressed { background-color: #454545; }"
+    "QMessageBox QPushButton:default { border: 2px solid #3578e5; }"
+    "QProgressBar { border: 1px solid #444; border-radius: 3px; background-color: #222;"
+    " color: #eee; text-align: center; }"
+    "QProgressBar::chunk { background-color: #3578e5; }"
 )
 
 
@@ -441,20 +455,6 @@ class VideoPlayer(QMainWindow):
             dialog.setWindowTitle("Resume Playback")
             dialog.setText("Continue from where you left off?")
             dialog.setInformativeText(f"Saved position: {format_time(saved)}")
-            dialog.setStyleSheet(
-                "QMessageBox QPushButton {"
-                " background-color: #f2f2f2;"
-                " color: #111;"
-                " border: 1px solid #999;"
-                " border-radius: 4px;"
-                " min-width: 72px;"
-                " min-height: 28px;"
-                " padding: 2px 12px;"
-                "}"
-                "QMessageBox QPushButton:hover { background-color: #e2e2e2; }"
-                "QMessageBox QPushButton:pressed { background-color: #d2d2d2; }"
-                "QMessageBox QPushButton:default { border: 2px solid #3578e5; }"
-            )
             resume_button = dialog.addButton("YES", QMessageBox.ButtonRole.AcceptRole)
             dialog.addButton("NO", QMessageBox.ButtonRole.RejectRole)
             dialog.setDefaultButton(resume_button)
