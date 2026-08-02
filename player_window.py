@@ -138,6 +138,11 @@ class MpvGLWidget(QOpenGLWidget):
             except Exception:
                 pass
             self._ctx = None
+        # Drop the player reference so a paintGL() that races in after shutdown
+        # (Qt can still deliver a queued repaint before the widget is actually
+        # destroyed) can't have initializeGL() recreate a render context
+        # against a core that terminate() is about to tear down.
+        self._player = None
 
 
 STYLE = (

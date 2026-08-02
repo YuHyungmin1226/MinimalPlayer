@@ -112,7 +112,10 @@ def _configure_macos_file_associations(app_path):
     )
 
 
-def build(dist_dir: str = "dist", work_dir: str = "build", spec_dir: str = "."):
+def build(dist_dir: str | None = None, work_dir: str | None = None, spec_dir: str | None = None):
+    dist_dir = dist_dir if dist_dir is not None else os.path.join(PROJECT_DIR, "dist")
+    work_dir = work_dir if work_dir is not None else os.path.join(PROJECT_DIR, "build")
+    spec_dir = spec_dir if spec_dir is not None else PROJECT_DIR
     print(f"Starting build for {APP_NAME} on {sys.platform}...")
 
     for directory in (dist_dir, work_dir, spec_dir):
