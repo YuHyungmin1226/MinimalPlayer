@@ -39,7 +39,7 @@ def _find_macos_libmpv():
             candidates.append(os.path.join(prefix, "lib"))
     except Exception:
         pass
-    candidates += ["/opt/homebrew/lib", "/usr/local/lib"]
+    candidates += ["/opt/homebrew/lib", "/usr/local/lib", os.path.expanduser("~/.homebrew/lib")]
     for d in candidates:
         for pattern in ("libmpv.dylib", "libmpv.2.dylib", "libmpv.1.dylib"):
             matches = glob.glob(os.path.join(d, pattern))
@@ -127,6 +127,14 @@ def build():
 
     # PyInstaller uses ';' as the add-binary separator on Windows and ':' elsewhere.
     sep = ";" if IS_WINDOWS else ":"
+
+    if os.path.exists("icon.png"):
+        params.append(f"--add-data=icon.png{sep}.")
+
+    if IS_WINDOWS and os.path.exists("icon.ico"):
+        params.append("--icon=icon.ico")
+    elif IS_MAC and os.path.exists("icon.icns"):
+        params.append("--icon=icon.icns")
 
     if IS_WINDOWS:
         # Single-file portable executable for Windows.

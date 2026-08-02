@@ -10,7 +10,7 @@ import subprocess
 from typing import Any, cast
 
 from PySide6.QtCore import QEasingCurve, QEvent, QPropertyAnimation, QSettings, Qt, QTimer, Signal, QProcess
-from PySide6.QtGui import QAction, QOpenGLContext, QPixmap
+from PySide6.QtGui import QAction, QOpenGLContext, QPixmap, QIcon
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -205,6 +205,19 @@ class VideoPlayer(QMainWindow):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.resize(1000, 600)
         self.setStyleSheet(STYLE)
+
+        # Set window icon
+        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.png")
+        if getattr(sys, "frozen", False):
+            # When frozen, check next to executable or in bundle resources
+            icon_path = os.path.join(os.path.dirname(sys.executable), "icon.png")
+            if not os.path.exists(icon_path):
+                # Fallback to _MEIPASS if it's there
+                meipass = getattr(sys, "_MEIPASS", None)
+                if meipass:
+                    icon_path = os.path.join(meipass, "icon.png")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
 
         self._build_ui()
         self._init_fade_animations()
