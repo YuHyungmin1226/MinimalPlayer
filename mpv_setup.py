@@ -144,7 +144,7 @@ def find_libmpv_dir() -> str | None:
     return None
 
 
-def prepare_mpv_library():
+def prepare_mpv_library(allow_download: bool = True):
     if IS_WINDOWS:
         meipass = getattr(sys, "_MEIPASS", None)
         if meipass and os.path.exists(os.path.join(meipass, MPV_DLL_NAME)):
@@ -153,6 +153,13 @@ def prepare_mpv_library():
             return
         _prepend_to_path(BASE_DIR)
         _add_windows_dll_directory(BASE_DIR)
+        if not allow_download:
+            dll_path = os.path.join(BASE_DIR, MPV_DLL_NAME)
+            if not verify_mpv_dll(dll_path):
+                raise RuntimeError(
+                    f"{MPV_DLL_NAME} is missing or failed SHA256 verification."
+                )
+            return
         check_and_download_mpv()
         return
 

@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import sys
 import os
+import tempfile
 from collections.abc import Callable
 
-from PySide6.QtCore import QEvent, QTimer
+from PySide6.QtCore import QEvent, QSettings, QTimer
 from PySide6.QtGui import QFileOpenEvent
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from file_association import register_file_associations
 from mpv_setup import IS_LINUX, IS_MAC, IS_WINDOWS, prepare_mpv_library
+from constants import APP_DISPLAY_NAME, APP_NAME, ORG_NAME
 
 
 class MediaApplication(QApplication):
@@ -70,15 +72,62 @@ def main() -> int:
         print("MinimalPlayer registered successfully to registry." if success else "An error occurred during registry registration.")
         return 0 if success else 1
 
+    smoke_test = "--smoke-test" in sys.argv[1:]
+
     app = MediaApplication(sys.argv)
     _ = app.setStyle("Fusion")
-    prepare_mpv_library()
+    app.setApplicationName(APP_NAME)
+    app.setApplicationDisplayName(APP_DISPLAY_NAME)
+    app.setOrganizationName(ORG_NAME)
+
+    try:
+        prepare_mpv_library(allow_download=not smoke_test)
+    except Exception as e:
+        if smoke_test:
+            print(f"SMOKE_TEST_ERROR: {e}", file=sys.stderr)
+            return 1
+        raise
 
     try:
         from player_window import VideoPlayer
     except (ImportError, OSError) as e:
+        if smoke_test:
+            print(f"SMOKE_TEST_ERROR: {e}", file=sys.stderr)
+            return 1
         show_mpv_import_error(e)
         return 1
+
+    if smoke_test:
+        with tempfile.TemporaryDirectory(prefix="minimalplayer-smoke-") as temp_dir:
+            smoke_settings = QSettings(
+                os.path.join(temp_dir, "settings.ini"),
+                QSettings.Format.IniFormat,
+            )
+            try:
+                player = VideoPlayer(
+                    settings=smoke_settings,
+                    interactive_errors=False,
+                )
+            except Exception as e:
+                print(f"SMOKE_TEST_ERROR: {e}", file=sys.stderr)
+                return 1
+
+            result = {"code": 1}
+
+            def finish_smoke_test() -> None:
+                try:
+                    player.close()
+                    smoke_settings.sync()
+                    result["code"] = 0
+                    print("SMOKE_TEST_OK")
+                except Exception as e:
+                    print(f"SMOKE_TEST_ERROR: {e}", file=sys.stderr)
+                finally:
+                    app.exit(result["code"])
+
+            QTimer.singleShot(0, player, finish_smoke_test)
+            app.exec()
+            return result["code"]
 
     player = VideoPlayer()
     player.setAcceptDrops(True)

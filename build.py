@@ -9,7 +9,8 @@ import subprocess
 from constants import AUDIO_EXTENSIONS, MPV_DLL_NAME, MPV_DLL_SHA256, VIDEO_EXTENSIONS
 
 # Build configuration
-ENTRY_POINT = "main.py"
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+ENTRY_POINT = os.path.join(PROJECT_DIR, "main.py")
 APP_NAME = "MinimalPlayer"
 BUNDLE_IDENTIFIER = "com.yuhyungmin.minimalplayer"
 
@@ -111,8 +112,11 @@ def _configure_macos_file_associations(app_path):
     )
 
 
-def build():
+def build(dist_dir: str = "dist", work_dir: str = "build", spec_dir: str = "."):
     print(f"Starting build for {APP_NAME} on {sys.platform}...")
+
+    for directory in (dist_dir, work_dir, spec_dir):
+        os.makedirs(directory, exist_ok=True)
 
     params = [
         ENTRY_POINT,
@@ -121,6 +125,9 @@ def build():
         "--noconfirm",
         "--clean",
         "--hidden-import=mpv",
+        "--distpath=" + dist_dir,
+        "--workpath=" + work_dir,
+        "--specpath=" + spec_dir,
     ]
     if IS_MAC:
         params.append("--osx-bundle-identifier=" + BUNDLE_IDENTIFIER)
@@ -128,27 +135,30 @@ def build():
     # PyInstaller uses ';' as the add-binary separator on Windows and ':' elsewhere.
     sep = ";" if IS_WINDOWS else ":"
 
-    if os.path.exists("icon.png"):
-        params.append(f"--add-data=icon.png{sep}.")
+    icon_png = os.path.join(PROJECT_DIR, "icon.png")
+    icon_ico = os.path.join(PROJECT_DIR, "icon.ico")
+    icon_icns = os.path.join(PROJECT_DIR, "icon.icns")
+    if os.path.exists(icon_png):
+        params.append(f"--add-data={icon_png}{sep}.")
 
-    if IS_WINDOWS and os.path.exists("icon.ico"):
-        params.append("--icon=icon.ico")
-    elif IS_MAC and os.path.exists("icon.icns"):
-        params.append("--icon=icon.icns")
+    if IS_WINDOWS and os.path.exists(icon_ico):
+        params.append("--icon=" + icon_ico)
+    elif IS_MAC and os.path.exists(icon_icns):
+        params.append("--icon=" + icon_icns)
 
     if IS_WINDOWS:
         # Single-file portable executable for Windows.
         params.append("--onefile")
-        dll_name = MPV_DLL_NAME
-        if os.path.exists(dll_name):
-            if not _verify_mpv_dll(dll_name):
-                print(f"ERROR: {dll_name} exists but failed SHA256 verification.")
+        dll_path = os.path.join(PROJECT_DIR, MPV_DLL_NAME)
+        if os.path.exists(dll_path):
+            if not _verify_mpv_dll(dll_path):
+                print(f"ERROR: {MPV_DLL_NAME} exists but failed SHA256 verification.")
                 print("Remove it to build an executable that downloads a verified DLL on first run,")
                 print("or replace it with the expected release asset before building.")
                 sys.exit(1)
-            params.append(f"--add-binary={dll_name}{sep}.")
+            params.append(f"--add-binary={dll_path}{sep}.")
         else:
-            print(f"Warning: {dll_name} not found in the project root.")
+            print(f"Warning: {MPV_DLL_NAME} not found in the project root.")
             print("It will be downloaded on first run of the built executable.")
     elif IS_MAC:
         # Use onedir (default) so PyInstaller produces a proper self-contained .app
@@ -170,13 +180,13 @@ def build():
     PyInstaller.__main__.run(params)
 
     if IS_MAC:
-        app_path = os.path.join("dist", f"{APP_NAME}.app")
+        app_path = os.path.join(dist_dir, f"{APP_NAME}.app")
         _configure_macos_file_associations(app_path)
         print()
         _verify_macos_bundle(app_path)
         print(f"\nBuild complete! Check '{app_path}'.")
     else:
-        out = f"dist/{APP_NAME}"
+        out = os.path.join(dist_dir, APP_NAME)
         if IS_WINDOWS:
             out += ".exe"
         print(f"\nBuild complete! Check '{out}'.")
