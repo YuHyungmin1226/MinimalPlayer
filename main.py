@@ -116,6 +116,14 @@ def main() -> int:
 
             def finish_smoke_test() -> None:
                 try:
+                    if player.current_media_path is not None:
+                        raise RuntimeError("A fresh player unexpectedly has media loaded.")
+                    if player.play_btn.text() != "Play":
+                        raise RuntimeError(
+                            f"Empty player button text is {player.play_btn.text()!r}, not 'Play'."
+                        )
+                    if player.play_btn.isEnabled():
+                        raise RuntimeError("Empty player Play button must be disabled.")
                     player.close()
                     smoke_settings.sync()
                     result["code"] = 0
