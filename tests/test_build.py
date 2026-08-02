@@ -8,6 +8,22 @@ import build
 
 
 class BuildTest(unittest.TestCase):
+    def test_build_accepts_isolated_output_directories(self):
+        with tempfile.TemporaryDirectory() as temp_dir, \
+                mock.patch.object(build, "IS_WINDOWS", False), \
+                mock.patch.object(build, "IS_MAC", False), \
+                mock.patch.object(build.PyInstaller.__main__, "run") as run:
+            dist_dir = os.path.join(temp_dir, "dist")
+            work_dir = os.path.join(temp_dir, "work")
+            spec_dir = os.path.join(temp_dir, "spec")
+
+            build.build(dist_dir=dist_dir, work_dir=work_dir, spec_dir=spec_dir)
+
+            params = run.call_args.args[0]
+            self.assertIn(f"--distpath={dist_dir}", params)
+            self.assertIn(f"--workpath={work_dir}", params)
+            self.assertIn(f"--specpath={spec_dir}", params)
+
     def test_verify_mpv_dll_rejects_hash_mismatch(self):
         with tempfile.NamedTemporaryFile(delete=False) as temp_file:
             temp_file.write(b"not the expected dll")

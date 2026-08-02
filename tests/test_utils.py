@@ -2,7 +2,23 @@ import os
 import tempfile
 import unittest
 
-from utils import convert_smi_to_srt_text, find_adjacent_media_in_folder, find_matching_image, find_matching_subtitle, find_next_media_in_folder, find_previous_media_in_folder, format_time, is_supported_audio, is_supported_media, is_supported_video, list_media_files_in_folder, natural_sort_key, normalize_recent_files
+from utils import (
+    convert_smi_file_to_temp_srt,
+    convert_smi_to_srt_text,
+    convert_subtitle_to_utf8,
+    find_adjacent_media_in_folder,
+    find_matching_image,
+    find_matching_subtitle,
+    find_next_media_in_folder,
+    find_previous_media_in_folder,
+    format_time,
+    is_supported_audio,
+    is_supported_media,
+    is_supported_video,
+    list_media_files_in_folder,
+    natural_sort_key,
+    normalize_recent_files,
+)
 
 
 class UtilsTest(unittest.TestCase):
@@ -156,6 +172,59 @@ class UtilsTest(unittest.TestCase):
         srt = convert_smi_to_srt_text(smi)
         self.assertIn("안녕하세요", srt)
         self.assertNotIn("Hello", srt)
+
+    def test_convert_smi_supports_quoted_start_and_extra_attributes(self):
+        smi = '<SAMI><BODY><SYNC Start="1000" id=first>안녕</BODY></SAMI>'
+        srt = convert_smi_to_srt_text(smi)
+        self.assertIn("00:00:01,000 --> 00:00:04,000", srt)
+        self.assertIn("안녕", srt)
+
+    def test_convert_cp949_subtitle_does_not_misread_it_as_utf16(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            subtitle = os.path.join(temp_dir, "clip.srt")
+            expected = "안녕"
+            with open(subtitle, "wb") as subtitle_file:
+                subtitle_file.write(expected.encode("cp949"))
+
+            converted = convert_subtitle_to_utf8(subtitle)
+            self.assertIsNotNone(converted)
+            try:
+                with open(converted, encoding="utf-8") as converted_file:
+                    self.assertEqual(converted_file.read(), expected)
+            finally:
+                if converted and os.path.exists(converted):
+                    os.remove(converted)
+
+    def test_convert_cp949_smi_preserves_markup_and_korean_text(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            subtitle = os.path.join(temp_dir, "clip.smi")
+            with open(subtitle, "wb") as subtitle_file:
+                subtitle_file.write("<SYNC Start=1000>안녕a".encode("cp949"))
+
+            converted = convert_smi_file_to_temp_srt(subtitle)
+            self.assertIsNotNone(converted)
+            try:
+                with open(converted, encoding="utf-8") as converted_file:
+                    self.assertIn("안녕a", converted_file.read())
+            finally:
+                if converted and os.path.exists(converted):
+                    os.remove(converted)
+
+    def test_convert_utf16_subtitle_still_uses_its_bom(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            subtitle = os.path.join(temp_dir, "clip.srt")
+            expected = "안녕"
+            with open(subtitle, "wb") as subtitle_file:
+                subtitle_file.write(expected.encode("utf-16"))
+
+            converted = convert_subtitle_to_utf8(subtitle)
+            self.assertIsNotNone(converted)
+            try:
+                with open(converted, encoding="utf-8") as converted_file:
+                    self.assertEqual(converted_file.read(), expected)
+            finally:
+                if converted and os.path.exists(converted):
+                    os.remove(converted)
 
 
 class NextMediaTest(unittest.TestCase):

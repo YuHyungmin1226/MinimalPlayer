@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import codecs
 import os
 import re
 import tempfile
-from html import unescape
 from collections.abc import Iterable
+from html import unescape
 
 from constants import AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, MEDIA_EXTENSIONS, SUBTITLE_EXTENSIONS, VIDEO_EXTENSIONS
 
@@ -224,7 +225,12 @@ def _clean_smi_text(text: str) -> str:
 
 
 def convert_smi_to_srt_text(smi_text: str) -> str:
-    matches = list(re.finditer(r"(?is)<sync\s+start\s*=\s*(\d+)\s*>", smi_text))
+    matches = list(
+        re.finditer(
+            r"(?is)<sync\s+start\s*=\s*['\"]?(\d+)['\"]?(?=[\s>])[^>]*>",
+            smi_text,
+        )
+    )
     cues: list[tuple[int, int, str]] = []
     starts = [int(match.group(1)) for match in matches]
     for index, match in enumerate(matches):
@@ -235,8 +241,14 @@ def convert_smi_to_srt_text(smi_text: str) -> str:
         text = _clean_smi_text(body_part)
         if not text:
             continue
-        later_starts = [candidate for candidate in starts[index + 1:] if candidate > start]
-        end = later_starts[0] if later_starts else start + 3000
+        end = start + 3000
+        # Usually the next cue is already greater. Avoid slicing and scanning the
+        # full remainder for every cue, which made large SMI files O(n²).
+        for later_index in range(index + 1, len(starts)):
+            candidate = starts[later_index]
+            if candidate > start:
+                end = candidate
+                break
         if end <= start:
             end = start + 3000
         cues.append((start, end, text))
@@ -246,15 +258,45 @@ def convert_smi_to_srt_text(smi_text: str) -> str:
     return "\n\n".join(blocks) + ("\n" if blocks else "")
 
 
-def _read_and_decode_subtitle(path: str) -> str:
-    """Read a subtitle file and decode with CJK encoding fallback."""
-    with open(path, "rb") as f:
-        raw = f.read()
-    for encoding in ("utf-8-sig", "utf-16", "cp949", "euc-kr"):
+def _decode_legacy_subtitle(raw: bytes) -> str | None:
+    """Decode non-UTF-8 subtitle bytes without guessing BOM-less UTF-16.
+
+    Python can decode many even-length CP949 byte strings as arbitrary UTF-16
+    code points. UTF-16/32 are therefore accepted only when their BOM identifies
+    the byte order; BOM-less Korean subtitles fall through to CP949/EUC-KR.
+    """
+    bom_encodings = (
+        (codecs.BOM_UTF32_LE, "utf-32"),
+        (codecs.BOM_UTF32_BE, "utf-32"),
+        (codecs.BOM_UTF16_LE, "utf-16"),
+        (codecs.BOM_UTF16_BE, "utf-16"),
+    )
+    for bom, encoding in bom_encodings:
+        if raw.startswith(bom):
+            try:
+                return raw.decode(encoding)
+            except UnicodeDecodeError:
+                return None
+
+    for encoding in ("cp949", "euc-kr"):
         try:
             return raw.decode(encoding)
         except UnicodeDecodeError:
             pass
+    return None
+
+
+def _read_and_decode_subtitle(path: str) -> str:
+    """Read a subtitle file and decode with CJK encoding fallback."""
+    with open(path, "rb") as f:
+        raw = f.read()
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        pass
+    decoded = _decode_legacy_subtitle(raw)
+    if decoded is not None:
+        return decoded
     return raw.decode("utf-8", errors="replace")
 
 
@@ -273,14 +315,7 @@ def convert_subtitle_to_utf8(subtitle_path: str) -> str | None:
     except UnicodeDecodeError:
         pass
 
-    text = None
-    for encoding in ("utf-16", "cp949", "euc-kr"):
-        try:
-            text = raw.decode(encoding)
-            break
-        except UnicodeDecodeError:
-            pass
-
+    text = _decode_legacy_subtitle(raw)
     if text is None:
         return None  # let mpv try its own guess
 

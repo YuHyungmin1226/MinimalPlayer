@@ -7,14 +7,16 @@ import sys
 import importlib
 import shutil
 import subprocess
+import tempfile
 from typing import Any, cast
 
 from PySide6.QtCore import QEasingCurve, QEvent, QPropertyAnimation, QSettings, Qt, QTimer, Signal, QProcess
-from PySide6.QtGui import QAction, QOpenGLContext, QPixmap, QIcon
+from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QOpenGLContext, QPixmap
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
+    QGraphicsDropShadowEffect,
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
@@ -141,19 +143,22 @@ class MpvGLWidget(QOpenGLWidget):
 STYLE = (
     "QMainWindow { background-color: #121212; }"
     "#VideoContainer { background-color: #000000; }"
-    "#TitleBar { background-color: #1e1e1e; border-bottom: 1px solid #333; }"
     "#ControlBar { background-color: rgba(30, 30, 30, 220); border-top: 1px solid #333; }"
     "QPushButton { background: transparent; color: #eee; border: none; "
     "font-size: 14px; padding: 5px; outline: none; }"
     "QPushButton:hover { background-color: rgba(255, 255, 255, 0.1); }"
     "QPushButton:pressed { background-color: rgba(255, 255, 255, 0.2); }"
-    "QPushButton:focus { background: transparent; }"
+    "QPushButton:focus { background-color: rgba(53, 120, 229, 0.22); border: 1px solid #4c9aff; }"
     "QPushButton:disabled { color: #555; background: transparent; }"
+    "QSlider { outline: none; }"
     "QSlider::groove:horizontal { border: 1px solid #444; height: 4px; background: #222; margin: 2px 0; }"
     "QSlider::handle:horizontal { background: #888; border: 1px solid #888; width: 14px; height: 14px; "
     "margin: -5px 0; border-radius: 7px; }"
+    "QSlider::handle:horizontal:focus { background: #4c9aff; border: 1px solid #8dc0ff; }"
     "QLabel { color: #aaa; font-size: 12px; }"
-    "#TitleLabel { color: #eee; font-weight: bold; }"
+    "QMenuBar { background-color: #1e1e1e; color: #eee; border-bottom: 1px solid #333; }"
+    "QMenuBar::item { background: transparent; padding: 5px 9px; }"
+    "QMenuBar::item:selected { background-color: rgba(255, 255, 255, 0.12); }"
     "QMenu { background-color: #1e1e1e; color: #eee; border: 1px solid #333; }"
     "QMenu::item { background-color: transparent; padding: 6px 20px; }"
     "QMenu::item:selected { background-color: rgba(255, 255, 255, 0.1); }"
@@ -185,16 +190,22 @@ class ClickableSlider(QSlider):
         else:
             super().mousePressEvent(event)
 
+    def keyPressEvent(self, event):
+        old_value = self.value()
+        super().keyPressEvent(event)
+        if self.value() != old_value:
+            self.sliderMoved.emit(self.value())
+
 
 class VideoPlayer(QMainWindow):
-    def __init__(self):
+    def __init__(self, settings: QSettings | None = None, interactive_errors: bool = True):
         super().__init__()
-        self.settings = QSettings(ORG_NAME, APP_NAME)
+        self.settings = settings if settings is not None else QSettings(ORG_NAME, APP_NAME)
+        self._interactive_errors = interactive_errors
         self.current_media_path = None
         self.media_ended = False
         self.last_time_pos = 0
         self.last_duration = 0
-        self._drag_pos = None
         self._audio_pixmap: QPixmap = None
         self._audio_subtitle_on = False
         # 재생이 실제로 진행된 파일에 대해서만 EOF 자동 넘김을 허용하기 위한 플래그.
@@ -202,7 +213,7 @@ class VideoPlayer(QMainWindow):
         # 이 플래그가 없으면 그 값을 보고 폴더 전체를 순식간에 건너뛰게 됩니다.
         self._eof_armed = False
         
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+        self.setWindowTitle(APP_DISPLAY_NAME)
         self.resize(1000, 600)
         self.setStyleSheet(STYLE)
 
@@ -222,11 +233,6 @@ class VideoPlayer(QMainWindow):
         self._build_ui()
         self._init_fade_animations()
 
-        self.settings = QSettings(ORG_NAME, APP_NAME)
-
-        self.recent_actions: list[QAction] = []
-        self._update_recent_menu()
-
         self.converted_subtitle_paths: list[str] = []
         self.temp_files_to_clean = set()
         self.export_temp_paths: set[str] = set()
@@ -235,6 +241,8 @@ class VideoPlayer(QMainWindow):
         self.vol_slider.setValue(saved_vol)
 
         self._auto_advance_enabled = bool(self.settings.value("autoAdvance", True, type=bool))
+        self.recent_actions: list[QAction] = []
+        self._build_menus()
 
         self.timer = QTimer(self)
         self.timer.setInterval(100)
@@ -251,14 +259,12 @@ class VideoPlayer(QMainWindow):
         self.media_stack.setMouseTracking(True)
         self.video_container.setMouseTracking(True)
         self.audio_label.setMouseTracking(True)
-        self.title_bar.setMouseTracking(True)
         self.control_bar.setMouseTracking(True)
 
         self.central_widget.installEventFilter(self)
         self.media_stack.installEventFilter(self)
         self.video_container.installEventFilter(self)
         self.audio_label.installEventFilter(self)
-        self.title_bar.installEventFilter(self)
         self.control_bar.installEventFilter(self)
 
         self.setFocus()
@@ -270,32 +276,6 @@ class VideoPlayer(QMainWindow):
         self.main_layout = QVBoxLayout(self.central_widget)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
-
-        self.title_bar = QFrame()
-        self.title_bar.setObjectName("TitleBar")
-        self.title_bar.setFixedHeight(35)
-        self.title_bar_layout = QHBoxLayout(self.title_bar)
-        self.title_bar_layout.setContentsMargins(15, 0, 0, 0)
-
-        self.title_label = QLabel(APP_DISPLAY_NAME)
-        self.title_label.setObjectName("TitleLabel")
-        self.title_bar_layout.addWidget(self.title_label)
-        self.title_bar_layout.addStretch()
-
-        self.min_btn = QPushButton("-")
-        self.min_btn.setFixedSize(40, 35)
-        self.min_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.min_btn.clicked.connect(self.showMinimized)
-
-        self.close_btn = QPushButton("x")
-        self.close_btn.setFixedSize(40, 35)
-        self.close_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.close_btn.clicked.connect(self.close)
-        self.close_btn.setStyleSheet("QPushButton:hover { background-color: #e81123; color: white; }")
-
-        self.title_bar_layout.addWidget(self.min_btn)
-        self.title_bar_layout.addWidget(self.close_btn)
-        self.main_layout.addWidget(self.title_bar)
 
         self.media_stack = QStackedWidget()
         self.media_stack.setObjectName("VideoContainer")
@@ -315,6 +295,11 @@ class VideoPlayer(QMainWindow):
             "QLabel { background-color: transparent; color: #fff; font-size: 22px; "
             "font-weight: bold; padding: 6px; }"
         )
+        subtitle_shadow = QGraphicsDropShadowEffect(self.audio_sub_label)
+        subtitle_shadow.setBlurRadius(5)
+        subtitle_shadow.setColor(QColor(0, 0, 0, 230))
+        subtitle_shadow.setOffset(1.5, 1.5)
+        self.audio_sub_label.setGraphicsEffect(subtitle_shadow)
         self.audio_sub_label.hide()
 
         self.media_stack.addWidget(self.audio_label)
@@ -329,7 +314,8 @@ class VideoPlayer(QMainWindow):
 
         self.seek_slider = ClickableSlider(Qt.Orientation.Horizontal)
         self.seek_slider.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.seek_slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.seek_slider.setToolTip("Seek Position")
+        self.seek_slider.setAccessibleName("Seek Position")
         self.seek_slider.sliderMoved.connect(self.seek)
         self.control_layout.addWidget(self.seek_slider)
 
@@ -340,40 +326,43 @@ class VideoPlayer(QMainWindow):
         self.open_btn = QPushButton("Open")
         self.open_btn.setFixedSize(45, 35)
         self.open_btn.setToolTip("Open File")
-        self.open_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.open_btn.setAccessibleName("Open File")
         self.open_btn.clicked.connect(self.open_file_dialog)
         self.btns_layout.addWidget(self.open_btn)
 
         self.prev_btn = QPushButton("|<")
         self.prev_btn.setFixedSize(45, 35)
         self.prev_btn.setToolTip("Previous File in Folder")
-        self.prev_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.prev_btn.setAccessibleName("Previous File in Folder")
         self.prev_btn.setEnabled(False)
         self.prev_btn.clicked.connect(self.play_previous_in_folder)
         self.btns_layout.addWidget(self.prev_btn)
 
         self.back_btn = QPushButton("<<")
         self.back_btn.setFixedSize(45, 35)
-        self.back_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.back_btn.setToolTip("Back 10 Seconds")
+        self.back_btn.setAccessibleName("Back 10 Seconds")
         self.back_btn.clicked.connect(lambda: self.skip(-10))
         self.btns_layout.addWidget(self.back_btn)
 
         self.play_btn = QPushButton("Play")
         self.play_btn.setFixedSize(60, 35)
-        self.play_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.play_btn.setToolTip("Play or Pause")
+        self.play_btn.setAccessibleName("Play or Pause")
         self.play_btn.clicked.connect(self.toggle_pause)
         self.btns_layout.addWidget(self.play_btn)
 
         self.fwd_btn = QPushButton(">>")
         self.fwd_btn.setFixedSize(45, 35)
-        self.fwd_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.fwd_btn.setToolTip("Forward 10 Seconds")
+        self.fwd_btn.setAccessibleName("Forward 10 Seconds")
         self.fwd_btn.clicked.connect(lambda: self.skip(10))
         self.btns_layout.addWidget(self.fwd_btn)
 
         self.next_btn = QPushButton(">|")
         self.next_btn.setFixedSize(45, 35)
         self.next_btn.setToolTip("Next File in Folder")
-        self.next_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.next_btn.setAccessibleName("Next File in Folder")
         self.next_btn.setEnabled(False)
         self.next_btn.clicked.connect(self.play_next_in_folder)
         self.btns_layout.addWidget(self.next_btn)
@@ -395,12 +384,119 @@ class VideoPlayer(QMainWindow):
         self.vol_slider.setRange(0, 100)
         self.vol_slider.setValue(DEFAULT_VOLUME)
         self.vol_slider.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.vol_slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.vol_slider.setToolTip("Volume")
+        self.vol_slider.setAccessibleName("Volume")
         self.vol_slider.valueChanged.connect(lambda val: self.set_volume(val, show_osd=False))
         self.btns_layout.addWidget(self.vol_slider)
 
         self.control_layout.addLayout(self.btns_layout)
         self.main_layout.addWidget(self.control_bar)
+        self._set_media_controls_enabled(False)
+
+    def _build_menus(self) -> None:
+        menu_bar = self.menuBar()
+
+        self.file_menu = menu_bar.addMenu("&File")
+        self.open_action = QAction("&Open File...", self)
+        self.open_action.setShortcuts(
+            QKeySequence.keyBindings(QKeySequence.StandardKey.Open)
+        )
+        self.open_action.triggered.connect(self.open_file_dialog)
+        self.file_menu.addAction(self.open_action)
+
+        self.recent_menu = self.file_menu.addMenu("Open &Recent")
+
+        self.export_action = QAction("Export to MP4 Video...", self)
+        self.export_action.setEnabled(False)
+        self.export_action.triggered.connect(self.export_as_video)
+        self.file_menu.addAction(self.export_action)
+
+        if IS_WINDOWS:
+            self.file_menu.addSeparator()
+            self.default_app_action = QAction("Set as Default App", self)
+            self.default_app_action.triggered.connect(self.setup_default_program)
+            self.file_menu.addAction(self.default_app_action)
+
+        self.file_menu.addSeparator()
+        self.close_window_action = QAction("Close Window", self)
+        self.close_window_action.setShortcuts(
+            QKeySequence.keyBindings(QKeySequence.StandardKey.Close)
+        )
+        self.close_window_action.triggered.connect(self.close)
+        self.file_menu.addAction(self.close_window_action)
+
+        self.quit_action = QAction("Quit", self)
+        self.quit_action.setMenuRole(QAction.MenuRole.QuitRole)
+        self.quit_action.setShortcuts(
+            QKeySequence.keyBindings(QKeySequence.StandardKey.Quit)
+        )
+        self.quit_action.triggered.connect(self.close)
+        self.file_menu.addAction(self.quit_action)
+
+        self.playback_menu = menu_bar.addMenu("&Playback")
+        self.play_pause_action = QAction("Play/Pause", self)
+        self.play_pause_action.triggered.connect(self.toggle_pause)
+        self.playback_menu.addAction(self.play_pause_action)
+
+        self.back_action = QAction("Back 10 Seconds", self)
+        self.back_action.triggered.connect(lambda: self.skip(-10))
+        self.playback_menu.addAction(self.back_action)
+
+        self.forward_action = QAction("Forward 10 Seconds", self)
+        self.forward_action.triggered.connect(lambda: self.skip(10))
+        self.playback_menu.addAction(self.forward_action)
+
+        self.playback_menu.addSeparator()
+        self.previous_action = QAction("Previous File in Folder", self)
+        self.previous_action.triggered.connect(self.play_previous_in_folder)
+        self.playback_menu.addAction(self.previous_action)
+
+        self.next_action = QAction("Next File in Folder", self)
+        self.next_action.triggered.connect(self.play_next_in_folder)
+        self.playback_menu.addAction(self.next_action)
+
+        self.playback_menu.addSeparator()
+        self.auto_advance_action = QAction("Autoplay Next in Folder", self)
+        self.auto_advance_action.setCheckable(True)
+        self.auto_advance_action.setChecked(self._auto_advance_enabled)
+        self.auto_advance_action.toggled.connect(self.set_auto_advance_enabled)
+        self.playback_menu.addAction(self.auto_advance_action)
+
+        self.playback_menu.addSeparator()
+        subtitle_delay_back = QAction("Subtitle 0.1s Later", self)
+        subtitle_delay_back.triggered.connect(lambda: self.adjust_sub_delay(0.1))
+        self.playback_menu.addAction(subtitle_delay_back)
+        subtitle_delay_forward = QAction("Subtitle 0.1s Earlier", self)
+        subtitle_delay_forward.triggered.connect(lambda: self.adjust_sub_delay(-0.1))
+        self.playback_menu.addAction(subtitle_delay_forward)
+        subtitle_smaller = QAction("Smaller Subtitles", self)
+        subtitle_smaller.triggered.connect(lambda: self.adjust_sub_scale(-0.1))
+        self.playback_menu.addAction(subtitle_smaller)
+        subtitle_larger = QAction("Larger Subtitles", self)
+        subtitle_larger.triggered.connect(lambda: self.adjust_sub_scale(0.1))
+        self.playback_menu.addAction(subtitle_larger)
+
+        self.view_menu = menu_bar.addMenu("&View")
+        self.fullscreen_action = QAction("Full Screen", self)
+        self.fullscreen_action.setCheckable(True)
+        self.fullscreen_action.setShortcuts(
+            QKeySequence.keyBindings(QKeySequence.StandardKey.FullScreen)
+        )
+        self.fullscreen_action.triggered.connect(self.toggle_fullscreen)
+        self.view_menu.addAction(self.fullscreen_action)
+
+        self._update_recent_menu()
+        self._set_media_controls_enabled(False)
+        self.previous_action.setEnabled(False)
+        self.next_action.setEnabled(False)
+
+    def _set_media_controls_enabled(self, enabled: bool) -> None:
+        for control in (self.seek_slider, self.back_btn, self.play_btn, self.fwd_btn):
+            control.setEnabled(enabled)
+        for action_name in ("play_pause_action", "back_action", "forward_action"):
+            action = getattr(self, action_name, None)
+            if action is not None:
+                action.setEnabled(enabled)
 
     def _init_player(self):
         locale.setlocale(locale.LC_NUMERIC, "C")
@@ -415,9 +511,15 @@ class VideoPlayer(QMainWindow):
                 detail = "Install libmpv via your package manager and restart."
             else:
                 detail = "Please download 'mpv-1.dll' from the GitHub releases page and place it next to the executable."
-            _ = QMessageBox.critical(self, "Library Load Error", "Could not initialize the mpv media engine.\n\n" + detail)
             print(f"MPV initialization error: {e}")
-            sys.exit(1)
+            if self._interactive_errors:
+                _ = QMessageBox.critical(
+                    self,
+                    "Library Load Error",
+                    "Could not initialize the mpv media engine.\n\n" + detail,
+                )
+                sys.exit(1)
+            raise RuntimeError(f"Could not initialize mpv. {detail}") from e
 
     def has_video(self):
         return bool(self.current_media_path)
@@ -459,6 +561,13 @@ class VideoPlayer(QMainWindow):
                         self,
                         lambda: self._maybe_resume(path, attempts_remaining - 1),
                     )
+                return
+
+            # The file may have been replaced with a shorter one at the same
+            # path. Never seek to (or beyond) its EOF using a stale path-only
+            # resume entry, as that can immediately trigger auto-advance.
+            if saved >= float(duration) - 5:
+                self._clear_saved_position(path)
                 return
 
             self._is_resuming = True
@@ -512,6 +621,30 @@ class VideoPlayer(QMainWindow):
 
     def _update_recent_menu(self) -> None:
         self.recent_actions = []
+        if not hasattr(self, "recent_menu"):
+            return
+        self.recent_menu.clear()
+        recent_files = self._recent_files()
+        if not recent_files:
+            empty_action = self.recent_menu.addAction("No Recent Files")
+            empty_action.setEnabled(False)
+            return
+
+        for path in recent_files:
+            action = QAction(os.path.basename(path), self.recent_menu)
+            action.setToolTip(path)
+            action.triggered.connect(
+                lambda checked=False, p=path: QTimer.singleShot(
+                    100, self, lambda: self.load_video(p)
+                )
+            )
+            self.recent_menu.addAction(action)
+            self.recent_actions.append(action)
+
+        self.recent_menu.addSeparator()
+        clear_action = QAction("Clear Recent Files", self.recent_menu)
+        clear_action.triggered.connect(self.clear_recent_files)
+        self.recent_menu.addAction(clear_action)
 
     def _cleanup_paths(self, paths: list[str]) -> None:
         for path in paths:
@@ -631,7 +764,18 @@ class VideoPlayer(QMainWindow):
             if not self.player:
                 return
 
-            if self.current_media_path and self.media_stack.currentWidget() == self.video_container:
+            if not self.current_media_path:
+                self.media_ended = False
+                self._set_media_controls_enabled(False)
+                if hasattr(self, "export_action"):
+                    self.export_action.setEnabled(False)
+                self.seek_slider.setRange(0, 0)
+                self.time_label.setText("00:00 / 00:00")
+                if self.play_btn.text() != "Play":
+                    self.play_btn.setText("Play")
+                return
+
+            if self.media_stack.currentWidget() == self.video_container:
                 tracks = getattr(self.player, "track_list", None)
                 if tracks:
                     has_vid = any(t.get("type") == "video" for t in tracks)
@@ -763,7 +907,9 @@ class VideoPlayer(QMainWindow):
             is_audio = is_supported_audio(self.current_media_path)
             image_path = find_matching_image(self.current_media_path) if is_audio else None
 
-            self.title_label.setText(os.path.basename(self.current_media_path))
+            self.setWindowTitle(
+                f"{os.path.basename(self.current_media_path)} — {APP_DISPLAY_NAME}"
+            )
             self._remember_recent_file(self.current_media_path)
 
             if is_audio:
@@ -803,6 +949,11 @@ class VideoPlayer(QMainWindow):
                 print(f"Error loading file into mpv: {e}")
                 self.current_media_path = None
                 self._audio_subtitle_on = False
+                self.setWindowTitle(APP_DISPLAY_NAME)
+                self._set_media_controls_enabled(False)
+                self.export_action.setEnabled(False)
+                self.seek_slider.setRange(0, 0)
+                self.time_label.setText("00:00 / 00:00")
                 _ = QMessageBox.critical(
                     self,
                     "Playback Error",
@@ -810,6 +961,8 @@ class VideoPlayer(QMainWindow):
                 )
                 return
 
+            self._set_media_controls_enabled(True)
+            self.export_action.setEnabled(is_audio)
             self.player.pause = False
             if self.video_container:
                 self.video_container.update()
@@ -831,6 +984,9 @@ class VideoPlayer(QMainWindow):
                 print(f"Error scanning the folder for adjacent files: {e}")
         self.prev_btn.setEnabled(prev_path is not None)
         self.next_btn.setEnabled(next_path is not None)
+        if hasattr(self, "previous_action"):
+            self.previous_action.setEnabled(prev_path is not None)
+            self.next_action.setEnabled(next_path is not None)
 
     def play_previous_in_folder(self) -> None:
         self._play_sibling(find_previous_media_in_folder)
@@ -859,6 +1015,11 @@ class VideoPlayer(QMainWindow):
     def set_auto_advance_enabled(self, enabled: bool) -> None:
         self._auto_advance_enabled = bool(enabled)
         self.settings.setValue("autoAdvance", self._auto_advance_enabled)
+        action = getattr(self, "auto_advance_action", None)
+        if action is not None and action.isChecked() != self._auto_advance_enabled:
+            action.blockSignals(True)
+            action.setChecked(self._auto_advance_enabled)
+            action.blockSignals(False)
 
     def _request_auto_advance(self) -> None:
         """재생이 끝나면 같은 폴더의 다음 파일을 예약합니다.
@@ -920,22 +1081,10 @@ class VideoPlayer(QMainWindow):
         self.audio_sub_label.setGeometry(margin, h - label_h - margin, max(1, w - 2 * margin), label_h)
 
     def _init_fade_animations(self) -> None:
-        """Set up opacity effects/animations used to smoothly fade the
-        title/control bars in and out during fullscreen auto-hide."""
-        self._title_opacity_effect = QGraphicsOpacityEffect(self.title_bar)
-        self._title_opacity_effect.setOpacity(1.0)
-        self.title_bar.setGraphicsEffect(self._title_opacity_effect)
-
+        """Set up the fullscreen control-bar fade animation."""
         self._control_opacity_effect = QGraphicsOpacityEffect(self.control_bar)
         self._control_opacity_effect.setOpacity(1.0)
         self.control_bar.setGraphicsEffect(self._control_opacity_effect)
-
-        self._title_fade_anim = QPropertyAnimation(self._title_opacity_effect, b"opacity", self)
-        self._title_fade_anim.setDuration(210)
-        self._title_fade_anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
-        self._title_fade_anim.finished.connect(
-            lambda: self._on_fade_finished(self.title_bar, self._title_opacity_effect)
-        )
 
         self._control_fade_anim = QPropertyAnimation(self._control_opacity_effect, b"opacity", self)
         self._control_fade_anim.setDuration(210)
@@ -971,22 +1120,54 @@ class VideoPlayer(QMainWindow):
         if event.button() == Qt.MouseButton.LeftButton:
             child = self.childAt(event.position().toPoint())
             if child in (self.video_container, self.audio_label, self.media_stack):
-                if self.isFullScreen():
-                    self.showNormal()
-                    self._title_fade_anim.stop()
-                    self._control_fade_anim.stop()
-                    self._title_opacity_effect.setOpacity(1.0)
-                    self._control_opacity_effect.setOpacity(1.0)
-                    self.title_bar.show()
-                    self.control_bar.show()
-                    self.unsetCursor()
-                    self.mouse_timer.stop()
-                else:
-                    self.showFullScreen()
-                    self.handle_mouse_activity()
+                self.toggle_fullscreen()
                 event.accept()
                 return
         super().mouseDoubleClickEvent(event)
+
+    def toggle_fullscreen(self, _checked: bool = False) -> None:
+        self._set_fullscreen(not self.isFullScreen())
+
+    def _set_fullscreen(self, enabled: bool) -> None:
+        if enabled == self.isFullScreen():
+            self._sync_fullscreen_ui()
+            return
+        if enabled:
+            self._was_maximized_before_fullscreen = self.isMaximized()
+            self.showFullScreen()
+            self._sync_fullscreen_ui()
+            self.handle_mouse_activity()
+            return
+
+        if getattr(self, "_was_maximized_before_fullscreen", False):
+            self.showMaximized()
+        else:
+            self.showNormal()
+        self._sync_fullscreen_ui()
+
+    def _sync_fullscreen_ui(self) -> None:
+        fullscreen = self.isFullScreen()
+        action = getattr(self, "fullscreen_action", None)
+        if action is not None and action.isChecked() != fullscreen:
+            action.blockSignals(True)
+            action.setChecked(fullscreen)
+            action.blockSignals(False)
+
+        menu_bar = self.menuBar()
+        if fullscreen and not menu_bar.isNativeMenuBar():
+            menu_bar.hide()
+        elif not fullscreen:
+            menu_bar.show()
+            self._control_fade_anim.stop()
+            self._control_opacity_effect.setOpacity(1.0)
+            self.control_bar.show()
+            self.unsetCursor()
+            self.mouse_timer.stop()
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            QTimer.singleShot(0, self, self._sync_fullscreen_ui)
 
     def wheelEvent(self, event) -> None:
         delta = event.angleDelta().y()
@@ -1004,17 +1185,15 @@ class VideoPlayer(QMainWindow):
     def handle_mouse_activity(self) -> None:
         if self.isFullScreen():
             self.unsetCursor()
-            self._fade_widget_in(self.title_bar, self._title_opacity_effect, self._title_fade_anim)
             self._fade_widget_in(self.control_bar, self._control_opacity_effect, self._control_fade_anim)
             self.mouse_timer.start()
 
     def _hide_controls_on_timeout(self) -> None:
         if self.isFullScreen():
-            pos = self.mapFromGlobal(self.cursor().pos())
-            if self.control_bar.geometry().contains(pos) or self.title_bar.geometry().contains(pos):
+            pos = self.control_bar.mapFromGlobal(self.cursor().pos())
+            if self.control_bar.rect().contains(pos):
                 self.mouse_timer.start()
                 return
-            self._fade_widget_out(self.title_bar, self._title_opacity_effect, self._title_fade_anim)
             self._fade_widget_out(self.control_bar, self._control_opacity_effect, self._control_fade_anim)
             self.setCursor(Qt.CursorShape.BlankCursor)
 
@@ -1040,19 +1219,7 @@ class VideoPlayer(QMainWindow):
         elif key == Qt.Key.Key_Down:
             self.set_volume(self.vol_slider.value() - 5, show_osd=True)
         elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            if self.isFullScreen():
-                self.showNormal()
-                self._title_fade_anim.stop()
-                self._control_fade_anim.stop()
-                self._title_opacity_effect.setOpacity(1.0)
-                self._control_opacity_effect.setOpacity(1.0)
-                self.title_bar.show()
-                self.control_bar.show()
-                self.unsetCursor()
-                self.mouse_timer.stop()
-            else:
-                self.showFullScreen()
-                self.handle_mouse_activity()
+            self.toggle_fullscreen()
         elif key == Qt.Key.Key_Z:
             self.adjust_sub_delay(0.1)
         elif key == Qt.Key.Key_X:
@@ -1063,42 +1230,11 @@ class VideoPlayer(QMainWindow):
             self.adjust_sub_scale(0.1)
         elif key == Qt.Key.Key_Escape:
             if self.isFullScreen():
-                self.showNormal()
-                self._title_fade_anim.stop()
-                self._control_fade_anim.stop()
-                self._title_opacity_effect.setOpacity(1.0)
-                self._control_opacity_effect.setOpacity(1.0)
-                self.title_bar.show()
-                self.control_bar.show()
-                self.unsetCursor()
-                self.mouse_timer.stop()
+                self._set_fullscreen(False)
             else:
-                self.close()
+                super().keyPressEvent(event)
         else:
             super().keyPressEvent(event)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            child = self.childAt(event.position().toPoint())
-            draggable = {
-                self.video_container, self.audio_label, self.media_stack, 
-                self.title_bar, self.control_bar,
-                self.title_label, self.time_label, self.vol_label
-            }
-            if not self.isFullScreen() and (child is None or child in draggable):
-                self._drag_pos = event.globalPosition().toPoint()
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if self._drag_pos is not None:
-            delta = event.globalPosition().toPoint() - self._drag_pos
-            self.move(self.x() + delta.x(), self.y() + delta.y())
-            self._drag_pos = event.globalPosition().toPoint()
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        self._drag_pos = None
-        super().mouseReleaseEvent(event)
 
     def closeEvent(self, event):
         if hasattr(self, "timer"):
@@ -1271,7 +1407,7 @@ class VideoPlayer(QMainWindow):
                 self,
                 "Select Cover Image",
                 "",
-                "Images (*.png *.jpg *.jpeg *.bmp *.webp)"
+                "Images (*.png *.jpg *.jpeg *.bmp *.gif *.webp)"
             )
             if not image_path:
                 return
@@ -1289,6 +1425,34 @@ class VideoPlayer(QMainWindow):
 
         # 4. Check for subtitles
         sub_path = find_matching_subtitle(self.current_media_path)
+        if not sub_path:
+            subtitle_prompt = QMessageBox(self)
+            subtitle_prompt.setIcon(QMessageBox.Icon.Question)
+            subtitle_prompt.setWindowTitle("No Subtitle Found")
+            subtitle_prompt.setText("No matching subtitle was found for this audio file.")
+            subtitle_prompt.setInformativeText("Select a subtitle to burn in, or continue without subtitles.")
+            select_subtitle_button = subtitle_prompt.addButton(
+                "Select Subtitle...", QMessageBox.ButtonRole.ActionRole
+            )
+            without_subtitle_button = subtitle_prompt.addButton(
+                "Continue Without", QMessageBox.ButtonRole.AcceptRole
+            )
+            subtitle_prompt.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+            subtitle_prompt.setDefaultButton(without_subtitle_button)
+            subtitle_prompt.exec()
+            clicked_button = subtitle_prompt.clickedButton()
+            if clicked_button not in (select_subtitle_button, without_subtitle_button):
+                return
+            if clicked_button is select_subtitle_button:
+                sub_path, _ = QFileDialog.getOpenFileName(
+                    self,
+                    "Select Subtitle",
+                    os.path.dirname(self.current_media_path),
+                    "Subtitle Files (*.srt *.ass *.vtt *.smi);;All Files (*)",
+                )
+                if not sub_path:
+                    return
+
         if sub_path and not self._ffmpeg_has_filter(ffmpeg_path, "subtitles"):
             _ = QMessageBox.critical(
                 self,
@@ -1301,7 +1465,9 @@ class VideoPlayer(QMainWindow):
 
         # 5. Build FFmpeg command arguments
         args = ["-y"]
-        args += ["-loop", "1", "-i", image_path]
+        # -loop is specific to image2 and fails for GIF covers. Repeating the
+        # complete input works for both still images and animated GIFs.
+        args += ["-stream_loop", "-1", "-i", image_path]
         args += ["-i", self.current_media_path]
 
         vf_filters = ["scale=trunc(iw/2)*2:trunc(ih/2)*2"]
@@ -1320,7 +1486,21 @@ class VideoPlayer(QMainWindow):
         args += ["-c:a", "aac", "-b:a", "192k"]
         args += ["-shortest"]
         args += ["-progress", "pipe:1"]
-        args += [output_path]
+
+        try:
+            export_work_path = self._create_export_work_path(output_path)
+        except OSError as e:
+            _ = QMessageBox.critical(
+                self,
+                "Export Path Error",
+                f"Could not create a temporary output next to the selected file.\n\nDetails: {e}",
+            )
+            self._cleanup_export_temp_paths()
+            return
+        self._export_output_path = output_path
+        self._export_work_path = export_work_path
+        self.export_temp_paths.add(export_work_path)
+        args += [export_work_path]
 
         # 6. Initialize progress dialog
         self.export_dialog = QProgressDialog(
@@ -1345,6 +1525,21 @@ class VideoPlayer(QMainWindow):
         self.export_process.errorOccurred.connect(self._handle_export_error)
         self.export_process.finished.connect(self._handle_export_finished)
         self.export_process.start(ffmpeg_path, args)
+
+    @staticmethod
+    def _create_export_work_path(output_path: str) -> str:
+        """Create an atomic-export staging path beside the requested output."""
+        output_path = os.path.abspath(output_path)
+        output_dir = os.path.dirname(output_path)
+        stem = os.path.splitext(os.path.basename(output_path))[0] or "export"
+        handle = tempfile.NamedTemporaryFile(
+            prefix=f".{stem}-",
+            suffix=".tmp.mp4",
+            dir=output_dir,
+            delete=False,
+        )
+        handle.close()
+        return handle.name
 
     def _find_ffmpeg(self) -> str | None:
         candidates: list[str] = []
@@ -1432,19 +1627,35 @@ class VideoPlayer(QMainWindow):
             self._cleanup_export_temp_paths()
             return
         self.export_dialog.close()
-        self._cleanup_export_temp_paths()
         if self.export_cancelled:
+            self._cleanup_export_temp_paths()
             _ = QMessageBox.information(self, "Export Cancelled", "Video export was cancelled by the user.")
             return
 
         if getattr(self, "_export_error_shown", False):
             self._export_error_shown = False
+            self._cleanup_export_temp_paths()
             return
 
         if exit_status == QProcess.ExitStatus.NormalExit and exit_code == 0:
+            work_path = getattr(self, "_export_work_path", "")
+            output_path = getattr(self, "_export_output_path", "")
+            try:
+                os.replace(work_path, output_path)
+                self.export_temp_paths.discard(work_path)
+            except OSError as e:
+                self._cleanup_export_temp_paths()
+                _ = QMessageBox.critical(
+                    self,
+                    "Export Failed",
+                    f"The video was encoded, but could not replace the selected output file.\n\nDetails: {e}",
+                )
+                return
+            self._cleanup_export_temp_paths()
             _ = QMessageBox.information(self, "Export Complete", "Video exported successfully!")
         else:
             err = self.export_process.readAllStandardError().data().decode("utf-8", errors="replace")
+            self._cleanup_export_temp_paths()
             _ = QMessageBox.critical(
                 self,
                 "Export Failed",

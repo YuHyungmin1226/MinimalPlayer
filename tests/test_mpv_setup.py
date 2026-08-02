@@ -37,6 +37,21 @@ class MpvSetupTest(unittest.TestCase):
             add_dll_dir.assert_called_once_with(temp_dir)
             self.assertIn(handle, mpv_setup._DLL_DIRECTORY_HANDLES)
 
+    def test_noninteractive_windows_prepare_never_downloads_missing_dll(self):
+        with tempfile.TemporaryDirectory() as temp_dir, \
+                mock.patch.object(mpv_setup, "IS_WINDOWS", True), \
+                mock.patch.object(mpv_setup, "BASE_DIR", temp_dir), \
+                mock.patch.object(mpv_setup, "_prepend_to_path"), \
+                mock.patch.object(mpv_setup, "_add_windows_dll_directory"), \
+                mock.patch.object(mpv_setup, "check_and_download_mpv") as download:
+            if hasattr(sys, "_MEIPASS"):
+                delattr(sys, "_MEIPASS")
+
+            with self.assertRaisesRegex(RuntimeError, "missing or failed"):
+                mpv_setup.prepare_mpv_library(allow_download=False)
+
+            download.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
