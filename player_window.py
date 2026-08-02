@@ -321,6 +321,10 @@ class VideoPlayer(QMainWindow):
         self.seek_slider.setCursor(Qt.CursorShape.PointingHandCursor)
         self.seek_slider.setToolTip("Seek Position")
         self.seek_slider.setAccessibleName("Seek Position")
+        # Keep keyboard focus on the main window so the global playback
+        # shortcuts (arrow keys, Space, ...) always work, even right after
+        # clicking the seek bar to jump to a position.
+        self.seek_slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.seek_slider.sliderMoved.connect(self.seek)
         self.control_layout.addWidget(self.seek_slider)
 
@@ -332,6 +336,7 @@ class VideoPlayer(QMainWindow):
         self.open_btn.setFixedSize(45, 35)
         self.open_btn.setToolTip("Open File")
         self.open_btn.setAccessibleName("Open File")
+        self.open_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.open_btn.clicked.connect(self.open_file_dialog)
         self.btns_layout.addWidget(self.open_btn)
 
@@ -339,6 +344,7 @@ class VideoPlayer(QMainWindow):
         self.prev_btn.setFixedSize(45, 35)
         self.prev_btn.setToolTip("Previous File in Folder")
         self.prev_btn.setAccessibleName("Previous File in Folder")
+        self.prev_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.prev_btn.setEnabled(False)
         self.prev_btn.clicked.connect(self.play_previous_in_folder)
         self.btns_layout.addWidget(self.prev_btn)
@@ -347,6 +353,7 @@ class VideoPlayer(QMainWindow):
         self.back_btn.setFixedSize(45, 35)
         self.back_btn.setToolTip("Back 10 Seconds")
         self.back_btn.setAccessibleName("Back 10 Seconds")
+        self.back_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.back_btn.clicked.connect(lambda: self.skip(-10))
         self.btns_layout.addWidget(self.back_btn)
 
@@ -354,6 +361,7 @@ class VideoPlayer(QMainWindow):
         self.play_btn.setFixedSize(60, 35)
         self.play_btn.setToolTip("Play or Pause")
         self.play_btn.setAccessibleName("Play or Pause")
+        self.play_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.play_btn.clicked.connect(self.toggle_pause)
         self.btns_layout.addWidget(self.play_btn)
 
@@ -361,6 +369,7 @@ class VideoPlayer(QMainWindow):
         self.fwd_btn.setFixedSize(45, 35)
         self.fwd_btn.setToolTip("Forward 10 Seconds")
         self.fwd_btn.setAccessibleName("Forward 10 Seconds")
+        self.fwd_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.fwd_btn.clicked.connect(lambda: self.skip(10))
         self.btns_layout.addWidget(self.fwd_btn)
 
@@ -368,6 +377,7 @@ class VideoPlayer(QMainWindow):
         self.next_btn.setFixedSize(45, 35)
         self.next_btn.setToolTip("Next File in Folder")
         self.next_btn.setAccessibleName("Next File in Folder")
+        self.next_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.next_btn.setEnabled(False)
         self.next_btn.clicked.connect(self.play_next_in_folder)
         self.btns_layout.addWidget(self.next_btn)
@@ -391,6 +401,7 @@ class VideoPlayer(QMainWindow):
         self.vol_slider.setCursor(Qt.CursorShape.PointingHandCursor)
         self.vol_slider.setToolTip("Volume")
         self.vol_slider.setAccessibleName("Volume")
+        self.vol_slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.vol_slider.valueChanged.connect(lambda val: self.set_volume(val, show_osd=False))
         self.btns_layout.addWidget(self.vol_slider)
 
@@ -1237,7 +1248,7 @@ class VideoPlayer(QMainWindow):
             if self.isFullScreen():
                 self._set_fullscreen(False)
             else:
-                super().keyPressEvent(event)
+                self.close()
         else:
             super().keyPressEvent(event)
 

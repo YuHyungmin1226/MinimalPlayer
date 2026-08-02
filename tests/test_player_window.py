@@ -114,7 +114,46 @@ class NativeWindowTest(unittest.TestCase):
                     Qt.KeyboardModifier.NoModifier,
                 )
                 window.keyPressEvent(escape)
-                close.assert_not_called()
+                close.assert_called_once()
+            finally:
+                window.timer.stop()
+                window.mouse_timer.stop()
+                window.player = None
+                window.deleteLater()
+
+    def test_playback_controls_stay_out_of_the_keyboard_focus_chain(self):
+        """Buttons/sliders must not accept keyboard focus.
+
+        Otherwise clicking the seek bar (Jump-to-Click) or a control button
+        steals focus from the main window, and the global arrow-key/Space
+        shortcuts get swallowed by that widget's own default key handling
+        (e.g. QSlider nudging by one step) instead of reaching
+        VideoPlayer.keyPressEvent.
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = QSettings(
+                os.path.join(temp_dir, "settings.ini"),
+                QSettings.Format.IniFormat,
+            )
+
+            def init_fake_player(window):
+                window.player = types.SimpleNamespace(terminate=lambda: None)
+
+            with mock.patch.object(VideoPlayer, "_init_player", init_fake_player):
+                window = VideoPlayer(settings=settings, interactive_errors=False)
+            try:
+                no_focus = Qt.FocusPolicy.NoFocus
+                for widget in (
+                    window.seek_slider,
+                    window.vol_slider,
+                    window.open_btn,
+                    window.prev_btn,
+                    window.back_btn,
+                    window.play_btn,
+                    window.fwd_btn,
+                    window.next_btn,
+                ):
+                    self.assertEqual(widget.focusPolicy(), no_focus)
             finally:
                 window.timer.stop()
                 window.mouse_timer.stop()
