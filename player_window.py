@@ -41,7 +41,7 @@ from constants import (
 )
 from file_association import register_file_associations
 from mpv_setup import IS_LINUX, IS_MAC, IS_WINDOWS
-from utils import convert_smi_file_to_temp_srt, convert_subtitle_to_utf8, find_adjacent_media_in_folder, find_matching_image, find_matching_subtitle, find_next_media_in_folder, find_previous_media_in_folder, format_time, is_supported_audio, is_supported_media, normalize_recent_files
+from utils import convert_smi_file_to_temp_srt, convert_subtitle_to_utf8, find_adjacent_media_in_folder, find_matching_image, find_matching_subtitle, find_next_media_in_folder, find_previous_media_in_folder, format_time, is_supported_audio, is_supported_media, is_supported_subtitle, normalize_recent_files
 
 mpv = cast(Any, importlib.import_module("mpv"))
 
@@ -479,6 +479,11 @@ class VideoPlayer(QMainWindow):
         self.playback_menu.addAction(self.auto_advance_action)
 
         self.playback_menu.addSeparator()
+        self.load_subtitle_action = QAction("Load Subtitle...", self)
+        self.load_subtitle_action.setEnabled(False)
+        self.load_subtitle_action.triggered.connect(self.open_subtitle_dialog)
+        self.playback_menu.addAction(self.load_subtitle_action)
+
         subtitle_delay_back = QAction("Subtitle 0.1s Later", self)
         subtitle_delay_back.triggered.connect(lambda: self.adjust_sub_delay(0.1))
         self.playback_menu.addAction(subtitle_delay_back)
@@ -785,6 +790,8 @@ class VideoPlayer(QMainWindow):
                 self._set_media_controls_enabled(False)
                 if hasattr(self, "export_action"):
                     self.export_action.setEnabled(False)
+                if hasattr(self, "load_subtitle_action"):
+                    self.load_subtitle_action.setEnabled(False)
                 self.seek_slider.setRange(0, 0)
                 self.time_label.setText("00:00 / 00:00")
                 if self.play_btn.text() != "Play":
@@ -968,6 +975,7 @@ class VideoPlayer(QMainWindow):
                 self.setWindowTitle(APP_DISPLAY_NAME)
                 self._set_media_controls_enabled(False)
                 self.export_action.setEnabled(False)
+                self.load_subtitle_action.setEnabled(False)
                 self.seek_slider.setRange(0, 0)
                 self.time_label.setText("00:00 / 00:00")
                 _ = QMessageBox.critical(
@@ -979,6 +987,7 @@ class VideoPlayer(QMainWindow):
 
             self._set_media_controls_enabled(True)
             self.export_action.setEnabled(is_audio)
+            self.load_subtitle_action.setEnabled(True)
             self.player.pause = False
             if self.video_container:
                 self.video_container.update()
@@ -990,6 +999,58 @@ class VideoPlayer(QMainWindow):
         finally:
             self._is_loading = False
             self._update_nav_buttons()
+
+    def open_subtitle_dialog(self) -> None:
+        if not self.current_media_path:
+            _ = QMessageBox.information(
+                self,
+                "No Media Loaded",
+                "Open a video or audio file first, then load a subtitle for it.",
+            )
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Subtitle",
+            os.path.dirname(self.current_media_path),
+            "Subtitle Files (*.srt *.ass *.vtt *.smi);;All Files (*)",
+        )
+        if path:
+            self.load_subtitle_file(path)
+
+    def load_subtitle_file(self, path: str) -> None:
+        """Manually attach a subtitle file to the currently loaded media.
+
+        Used for both the "Load Subtitle..." dialog and subtitle files
+        dropped onto the window, since auto-detection only finds subtitles
+        that share the video's base filename in the same folder.
+        """
+        if not self.current_media_path or not self.player:
+            return
+        if not is_supported_subtitle(path):
+            _ = QMessageBox.warning(self, "Unsupported File", "Please select a supported subtitle file.")
+            return
+        try:
+            prepared_path = self._subtitle_path_for_player(path)
+        except Exception as e:
+            print(f"Error preparing subtitle: {e}")
+            _ = QMessageBox.critical(
+                self,
+                "Subtitle Error",
+                f"Failed to prepare the subtitle file.\n\nDetails: {e}",
+            )
+            return
+        try:
+            self.player.sub_add(prepared_path, flags="select")
+        except Exception as e:
+            _ = QMessageBox.critical(
+                self,
+                "Subtitle Error",
+                f"Failed to load the subtitle into the player.\n\nDetails: {e}",
+            )
+            return
+        self._audio_subtitle_on = True
+        self.audio_sub_label.setText("")
+        self.audio_sub_label.setVisible(False)
 
     def _update_nav_buttons(self) -> None:
         prev_path = next_path = None
@@ -1292,15 +1353,22 @@ class VideoPlayer(QMainWindow):
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             files = [u.toLocalFile() for u in event.mimeData().urls()]
-            if files and is_supported_media(files[0]):
+            if files and (
+                is_supported_media(files[0])
+                or (self.current_media_path and is_supported_subtitle(files[0]))
+            ):
                 event.acceptProposedAction()
             else:
                 event.ignore()
 
     def dropEvent(self, event):
         files = [u.toLocalFile() for u in event.mimeData().urls()]
-        if files:
+        if not files:
+            return
+        if is_supported_media(files[0]):
             self.load_video(files[0])
+        elif self.current_media_path and is_supported_subtitle(files[0]):
+            self.load_subtitle_file(files[0])
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
@@ -1314,6 +1382,11 @@ class VideoPlayer(QMainWindow):
         auto_advance_action.setChecked(self._auto_advance_enabled)
         auto_advance_action.toggled.connect(self.set_auto_advance_enabled)
         menu.addAction(auto_advance_action)
+
+        if self.current_media_path:
+            load_subtitle_action = QAction("Load Subtitle...", self)
+            load_subtitle_action.triggered.connect(self.open_subtitle_dialog)
+            menu.addAction(load_subtitle_action)
 
         # WAV/Audio to Video Export Option
         if self.current_media_path and is_supported_audio(self.current_media_path):

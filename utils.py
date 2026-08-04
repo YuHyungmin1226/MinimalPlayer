@@ -29,6 +29,10 @@ def is_supported_media(path: str) -> bool:
     return os.path.splitext(path)[1].lower() in MEDIA_EXTENSIONS
 
 
+def is_supported_subtitle(path: str) -> bool:
+    return os.path.splitext(path)[1].lower() in SUBTITLE_EXTENSIONS
+
+
 def find_matching_subtitle(video_path: str) -> str | None:
     dir_name, file_name = os.path.split(video_path)
     if not dir_name:

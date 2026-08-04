@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 import tempfile
 import types
@@ -7,9 +8,9 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QProcess, QSettings, Qt
+from PySide6.QtCore import QProcess, QSettings, Qt, QUrl
 from PySide6.QtGui import QKeyEvent
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 
 fake_mpv = types.ModuleType("mpv")
@@ -222,6 +223,119 @@ class ExportSafetyTest(unittest.TestCase):
             with open(output_path, "rb") as output_file:
                 self.assertEqual(output_file.read(), b"original")
             self.assertFalse(os.path.exists(work_path))
+
+
+class _FakeMimeData:
+    def __init__(self, path):
+        self._path = path
+
+    def hasUrls(self):
+        return True
+
+    def urls(self):
+        return [QUrl.fromLocalFile(self._path)]
+
+
+class _FakeDropEvent:
+    def __init__(self, path):
+        self._mime = _FakeMimeData(path)
+        self.accepted = None
+
+    def mimeData(self):
+        return self._mime
+
+    def acceptProposedAction(self):
+        self.accepted = True
+
+    def ignore(self):
+        self.accepted = False
+
+
+class ManualSubtitleLoadingTest(unittest.TestCase):
+    """Covers loading a subtitle (e.g. .ass) that doesn't share the video's
+    base filename, so auto-detection alone can't find it — via the
+    "Load Subtitle..." dialog/menu action and via drag-and-drop."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def _window(self, media_path=None):
+        settings_dir = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(settings_dir, ignore_errors=True))
+        settings = QSettings(os.path.join(settings_dir, "settings.ini"), QSettings.Format.IniFormat)
+
+        def init_fake_player(window):
+            window.player = types.SimpleNamespace(terminate=lambda: None, sub_add=mock.Mock())
+
+        with mock.patch.object(VideoPlayer, "_init_player", init_fake_player):
+            window = VideoPlayer(settings=settings, interactive_errors=False)
+        window.current_media_path = media_path
+        self.addCleanup(self._teardown, window)
+        return window
+
+    @staticmethod
+    def _teardown(window):
+        window.timer.stop()
+        window.mouse_timer.stop()
+        window.player = None
+        window.deleteLater()
+
+    def test_open_subtitle_dialog_without_media_warns_instead_of_opening_file_dialog(self):
+        window = self._window(media_path=None)
+        with mock.patch.object(QMessageBox, "information") as info, \
+                mock.patch.object(QFileDialog, "getOpenFileName") as dialog:
+            window.open_subtitle_dialog()
+        info.assert_called_once()
+        dialog.assert_not_called()
+
+    def test_load_subtitle_file_rejects_a_non_subtitle_extension(self):
+        window = self._window(media_path="/media/video.mp4")
+        with mock.patch.object(QMessageBox, "warning") as warn:
+            window.load_subtitle_file("/media/video.mp4")
+        warn.assert_called_once()
+        window.player.sub_add.assert_not_called()
+
+    def test_load_subtitle_file_attaches_ass_subtitle_not_matching_video_name(self):
+        window = self._window(media_path="/media/video.mp4")
+        with tempfile.NamedTemporaryFile(suffix=".ass", delete=False) as f:
+            f.write("[Script Info]\n".encode("utf-8"))
+            sub_path = f.name
+        self.addCleanup(lambda: os.path.exists(sub_path) and os.remove(sub_path))
+
+        window.load_subtitle_file(sub_path)
+
+        window.player.sub_add.assert_called_once()
+        called_path = window.player.sub_add.call_args.args[0]
+        called_flags = window.player.sub_add.call_args.kwargs.get("flags")
+        self.assertTrue(os.path.exists(called_path))
+        self.assertEqual(called_flags, "select")
+        self.assertTrue(window._audio_subtitle_on)
+
+    def test_drag_enter_accepts_lone_subtitle_only_once_media_is_loaded(self):
+        with tempfile.NamedTemporaryFile(suffix=".ass", delete=False) as f:
+            sub_path = f.name
+        self.addCleanup(lambda: os.path.exists(sub_path) and os.remove(sub_path))
+
+        no_media_window = self._window(media_path=None)
+        rejected = _FakeDropEvent(sub_path)
+        no_media_window.dragEnterEvent(rejected)
+        self.assertFalse(rejected.accepted)
+
+        loaded_window = self._window(media_path="/media/video.mp4")
+        accepted = _FakeDropEvent(sub_path)
+        loaded_window.dragEnterEvent(accepted)
+        self.assertTrue(accepted.accepted)
+
+    def test_drop_event_routes_subtitle_to_load_subtitle_file(self):
+        window = self._window(media_path="/media/video.mp4")
+        with tempfile.NamedTemporaryFile(suffix=".ass", delete=False) as f:
+            sub_path = f.name
+        self.addCleanup(lambda: os.path.exists(sub_path) and os.remove(sub_path))
+
+        window.dropEvent(_FakeDropEvent(sub_path))
+
+        window.player.sub_add.assert_called_once()
 
 
 if __name__ == "__main__":
