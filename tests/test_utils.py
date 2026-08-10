@@ -26,6 +26,10 @@ class UtilsTest(unittest.TestCase):
         self.assertEqual(format_time(65), "01:05")
         self.assertEqual(format_time(3661), "01:01:01")
 
+    def test_format_time_handles_non_finite_values(self):
+        self.assertEqual(format_time(float("inf")), "00:00")
+        self.assertEqual(format_time(float("nan")), "00:00")
+
     def test_is_supported_video_is_case_insensitive(self):
         self.assertTrue(is_supported_video("movie.MP4"))
         self.assertFalse(is_supported_video("notes.txt"))
@@ -172,6 +176,17 @@ class UtilsTest(unittest.TestCase):
         srt = convert_smi_to_srt_text(smi)
         self.assertIn("안녕하세요", srt)
         self.assertNotIn("Hello", srt)
+
+    def test_convert_smi_handles_descending_timestamps(self):
+        smi = (
+            "<SYNC Start=5000>first"
+            "<SYNC Start=1000>second"
+            "<SYNC Start=2000>third"
+        )
+        srt = convert_smi_to_srt_text(smi)
+        self.assertIn("00:00:05,000 --> 00:00:08,000", srt)
+        self.assertIn("00:00:01,000 --> 00:00:02,000", srt)
+        self.assertIn("00:00:02,000 --> 00:00:05,000", srt)
 
     def test_convert_smi_supports_quoted_start_and_extra_attributes(self):
         smi = '<SAMI><BODY><SYNC Start="1000" id=first>안녕</BODY></SAMI>'

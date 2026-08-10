@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import locale
+import math
 import os
 import sys
 import importlib
@@ -538,6 +539,8 @@ class VideoPlayer(QMainWindow):
             duration = float(self.player.duration or 0)
         except Exception:
             return
+        if not math.isfinite(pos) or (duration != 0 and not math.isfinite(duration)):
+            return
         if pos > RESUME_THRESHOLD_SECONDS and (duration == 0 or pos < duration - 5):
             self.settings.setValue(self._setting_key_for_path(str(self.current_media_path)), pos)
         elif duration > 0 and pos >= duration - 5:
@@ -550,11 +553,11 @@ class VideoPlayer(QMainWindow):
             if not self.player or not self.current_media_path or path != self.current_media_path:
                 return
             saved = float(str(self.settings.value(self._setting_key_for_path(path), 0) or 0))
-            if saved < RESUME_THRESHOLD_SECONDS:
+            if not math.isfinite(saved) or saved < RESUME_THRESHOLD_SECONDS:
                 return
 
             duration = self.player.duration
-            if duration is None or duration <= 0:
+            if duration is None or not math.isfinite(duration) or duration <= 0:
                 if attempts_remaining > 0:
                     QTimer.singleShot(
                         100,
@@ -807,10 +810,10 @@ class VideoPlayer(QMainWindow):
             except (AttributeError, mpv.ShutdownError):
                 return
 
-            if duration is not None and duration > 0:
+            if duration is not None and math.isfinite(duration) and duration > 0:
                 self.last_duration = int(duration)
 
-            if duration is not None and duration > 0:
+            if duration is not None and math.isfinite(duration) and duration > 0:
                 if (eof_reached or (idle_active and time_pos is None)):
                     self.media_ended = True
                     if self.current_media_path:
@@ -825,12 +828,14 @@ class VideoPlayer(QMainWindow):
                         self._request_auto_advance()
                     return
 
-            if time_pos is not None:
+            if time_pos is not None and math.isfinite(time_pos):
                 self.media_ended = False
                 if not eof_reached and self.current_media_path:
                     self._eof_armed = True
                 curr = int(time_pos)
-                total = self.last_duration if self.last_duration > 0 else int(duration or 0)
+                total = self.last_duration
+                if total <= 0 and duration is not None and math.isfinite(duration):
+                    total = int(duration)
                 
                 if total > 0:
                     curr = min(curr, total)
@@ -1519,6 +1524,7 @@ class VideoPlayer(QMainWindow):
         # 진행률 기준 길이는 시작 시점에 고정합니다. 내보내는 동안 자동 넘김이나
         # 드래그 앤 드롭으로 다른 파일이 로드되면 self.last_duration이 바뀌기 때문입니다.
         self._export_total_seconds = self.last_duration
+        self._export_progress_buffer = ""
         self.export_cancelled = False
         self.export_process = QProcess(self)
         self.export_process.readyReadStandardOutput.connect(self._handle_export_progress)
@@ -1609,8 +1615,15 @@ class VideoPlayer(QMainWindow):
             self.export_process.kill()
 
     def _handle_export_progress(self):
-        data = self.export_process.readAllStandardOutput().data().decode("utf-8", errors="replace")
-        for line in data.splitlines():
+        data = getattr(self, "_export_progress_buffer", "")
+        data += self.export_process.readAllStandardOutput().data().decode("utf-8", errors="replace")
+        lines = data.splitlines()
+        if data and not data.endswith(("\n", "\r")):
+            self._export_progress_buffer = lines.pop() if lines else data
+        else:
+            self._export_progress_buffer = ""
+
+        for line in lines:
             if line.startswith("out_time_us="):
                 try:
                     us = int(line.split("=")[1])

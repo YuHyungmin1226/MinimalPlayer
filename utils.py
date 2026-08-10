@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import codecs
+import math
 import os
 import re
 import tempfile
@@ -11,7 +12,13 @@ from constants import AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, MEDIA_EXTENSIONS, SUBT
 
 
 def format_time(seconds: float | int | None) -> str:
-    seconds = max(0, int(seconds or 0))
+    try:
+        seconds_value = float(seconds or 0)
+    except (TypeError, ValueError, OverflowError):
+        seconds_value = 0
+    if not math.isfinite(seconds_value):
+        seconds_value = 0
+    seconds = max(0, int(seconds_value))
     minutes, secs = divmod(seconds, 60)
     hours, minutes = divmod(minutes, 60)
     return f"{hours:02d}:{minutes:02d}:{secs:02d}" if hours > 0 else f"{minutes:02d}:{secs:02d}"
@@ -233,6 +240,19 @@ def convert_smi_to_srt_text(smi_text: str) -> str:
     )
     cues: list[tuple[int, int, str]] = []
     starts = [int(match.group(1)) for match in matches]
+
+    # Find the first later timestamp greater than each start in O(n). SMI files
+    # are normally ordered, but malformed files can contain descending times;
+    # scanning the remainder for every cue would otherwise become O(n^2).
+    next_greater_starts: list[int | None] = [None] * len(starts)
+    greater_indices: list[int] = []
+    for index in range(len(starts) - 1, -1, -1):
+        while greater_indices and starts[greater_indices[-1]] <= starts[index]:
+            greater_indices.pop()
+        if greater_indices:
+            next_greater_starts[index] = starts[greater_indices[-1]]
+        greater_indices.append(index)
+
     for index, match in enumerate(matches):
         start = starts[index]
         body_start = match.end()
@@ -241,14 +261,9 @@ def convert_smi_to_srt_text(smi_text: str) -> str:
         text = _clean_smi_text(body_part)
         if not text:
             continue
-        end = start + 3000
-        # Usually the next cue is already greater. Avoid slicing and scanning the
-        # full remainder for every cue, which made large SMI files O(n²).
-        for later_index in range(index + 1, len(starts)):
-            candidate = starts[later_index]
-            if candidate > start:
-                end = candidate
-                break
+        end = next_greater_starts[index]
+        if end is None:
+            end = start + 3000
         if end <= start:
             end = start + 3000
         cues.append((start, end, text))

@@ -33,10 +33,20 @@ class _Slider:
     def __init__(self):
         self.minimum = None
         self.maximum = None
+        self.value = None
 
     def setRange(self, minimum, maximum):
         self.minimum = minimum
         self.maximum = maximum
+
+    def setMaximum(self, maximum):
+        self.maximum = maximum
+
+    def isSliderDown(self):
+        return False
+
+    def setValue(self, value):
+        self.value = value
 
 
 class PlayerStateTest(unittest.TestCase):
@@ -58,6 +68,46 @@ class PlayerStateTest(unittest.TestCase):
         self.assertEqual((window.seek_slider.minimum, window.seek_slider.maximum), (0, 0))
         window._set_media_controls_enabled.assert_called_once_with(False)
         self.assertFalse(window.media_ended)
+
+    def test_save_position_ignores_non_finite_duration(self):
+        settings = mock.Mock()
+        window = types.SimpleNamespace(
+            current_media_path="/media/live.mp4",
+            player=types.SimpleNamespace(time_pos=20, duration=float("inf")),
+            settings=settings,
+            has_video=lambda: True,
+        )
+
+        VideoPlayer._save_current_position(window)
+
+        settings.setValue.assert_not_called()
+
+    def test_status_ignores_non_finite_duration(self):
+        window = types.SimpleNamespace(
+            player=types.SimpleNamespace(
+                track_list=[],
+                time_pos=5,
+                duration=float("inf"),
+                pause=False,
+                idle_active=False,
+                eof_reached=False,
+            ),
+            current_media_path="/media/live.mkv",
+            media_stack=types.SimpleNamespace(currentWidget=lambda: None),
+            video_container=object(),
+            _audio_subtitle_on=False,
+            media_ended=False,
+            last_duration=0,
+            last_time_pos=0,
+            seek_slider=_Slider(),
+            time_label=_Label(),
+            play_btn=_Label("Play"),
+        )
+
+        VideoPlayer.update_status(window)
+
+        self.assertEqual(window.seek_slider.maximum, 0)
+        self.assertEqual(window.time_label.text(), "00:05 / 00:00")
 
     def test_resume_position_past_new_duration_is_discarded(self):
         path = "/media/replaced.mp4"
@@ -183,6 +233,35 @@ class ExportSafetyTest(unittest.TestCase):
             with open(output_path, "rb") as output_file:
                 self.assertEqual(output_file.read(), b"original")
             self.assertFalse(os.path.exists(work_path))
+
+    def test_export_progress_preserves_a_line_split_across_process_chunks(self):
+        class _ByteArray:
+            def __init__(self, value):
+                self.value = value
+
+            def data(self):
+                return self.value
+
+        class _Process:
+            def __init__(self):
+                self.chunks = [b"out_time_us=500", b"000\n"]
+
+            def readAllStandardOutput(self):
+                return _ByteArray(self.chunks.pop(0))
+
+        progress = mock.Mock()
+        window = types.SimpleNamespace(
+            export_process=_Process(),
+            export_dialog=progress,
+            _export_progress_buffer="",
+            _export_total_seconds=10,
+            last_duration=10,
+        )
+
+        VideoPlayer._handle_export_progress(window)
+        progress.setValue.assert_not_called()
+        VideoPlayer._handle_export_progress(window)
+        progress.setValue.assert_called_once_with(5)
 
 
 if __name__ == "__main__":
