@@ -161,6 +161,37 @@ class NativeWindowTest(unittest.TestCase):
                 window.player = None
                 window.deleteLater()
 
+    def test_close_event_is_reentrancy_guarded(self):
+        """closeEvent() can pump the event loop (export_process.waitForFinished),
+        so a second close request arriving before the first finishes tearing
+        down must not re-run terminate()/shutdown()/cleanup a second time."""
+        from PySide6.QtGui import QCloseEvent
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = QSettings(
+                os.path.join(temp_dir, "settings.ini"),
+                QSettings.Format.IniFormat,
+            )
+
+            def init_fake_player(window):
+                window.player = types.SimpleNamespace(terminate=mock.Mock())
+
+            with mock.patch.object(VideoPlayer, "_init_player", init_fake_player):
+                window = VideoPlayer(settings=settings, interactive_errors=False)
+            try:
+                window.video_container.shutdown = mock.Mock()
+
+                window.closeEvent(QCloseEvent())
+                window.closeEvent(QCloseEvent())
+
+                window.player.terminate.assert_called_once()
+                window.video_container.shutdown.assert_called_once()
+            finally:
+                window.timer.stop()
+                window.mouse_timer.stop()
+                window.player = None
+                window.deleteLater()
+
 
 class ExportSafetyTest(unittest.TestCase):
     def _window_for_export(self, output_path, work_path):
@@ -310,7 +341,50 @@ class ManualSubtitleLoadingTest(unittest.TestCase):
         called_flags = window.player.sub_add.call_args.kwargs.get("flags")
         self.assertTrue(os.path.exists(called_path))
         self.assertEqual(called_flags, "select")
-        self.assertTrue(window._audio_subtitle_on)
+
+    def test_load_subtitle_file_sets_audio_overlay_flag_only_for_audio_media(self):
+        """_audio_subtitle_on gates the custom on-screen text overlay used
+        only in audio-file mode; mpv renders subtitles onto video frames
+        itself, so this must stay False for video media."""
+        with tempfile.NamedTemporaryFile(suffix=".ass", delete=False) as f:
+            f.write("[Script Info]\n".encode("utf-8"))
+            sub_path = f.name
+        self.addCleanup(lambda: os.path.exists(sub_path) and os.remove(sub_path))
+
+        video_window = self._window(media_path="/media/video.mp4")
+        video_window.load_subtitle_file(sub_path)
+        self.assertFalse(video_window._audio_subtitle_on)
+
+        audio_window = self._window(media_path="/media/song.mp3")
+        audio_window.load_subtitle_file(sub_path)
+        self.assertTrue(audio_window._audio_subtitle_on)
+
+    def test_load_subtitle_file_cleans_up_previously_converted_temp_file(self):
+        """Trying several candidate subtitles in a row (without reloading the
+        video) must not leak a converted temp file per attempt."""
+        window = self._window(media_path="/media/video.mp4")
+        with tempfile.NamedTemporaryFile(suffix=".srt", delete=False) as f:
+            f.write("1\n00:00:00,000 --> 00:00:01,000\n한글 자막 A\n".encode("cp949"))
+            sub_a = f.name
+        with tempfile.NamedTemporaryFile(suffix=".srt", delete=False) as f:
+            f.write("1\n00:00:00,000 --> 00:00:01,000\n한글 자막 B\n".encode("cp949"))
+            sub_b = f.name
+        self.addCleanup(lambda: os.path.exists(sub_a) and os.remove(sub_a))
+        self.addCleanup(lambda: os.path.exists(sub_b) and os.remove(sub_b))
+
+        window.load_subtitle_file(sub_a)
+        first_temp = window._manual_subtitle_temp_path
+        self.assertIsNotNone(first_temp, "cp949 source should have produced a converted temp file")
+        self.assertTrue(os.path.exists(first_temp))
+        self.addCleanup(lambda: os.path.exists(first_temp) and os.remove(first_temp))
+
+        window.load_subtitle_file(sub_b)
+        second_temp = window._manual_subtitle_temp_path
+        self.assertIsNotNone(second_temp)
+        self.assertNotEqual(first_temp, second_temp)
+        self.assertFalse(os.path.exists(first_temp), "superseded manual subtitle temp file should be removed")
+        self.assertTrue(os.path.exists(second_temp))
+        self.addCleanup(lambda: os.path.exists(second_temp) and os.remove(second_temp))
 
     def test_drag_enter_accepts_lone_subtitle_only_once_media_is_loaded(self):
         with tempfile.NamedTemporaryFile(suffix=".ass", delete=False) as f:

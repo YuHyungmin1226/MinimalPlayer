@@ -54,6 +54,9 @@ def _add_windows_dll_directory(directory: str) -> None:
 
 
 def check_and_download_mpv():
+    if QApplication.instance() is None:
+        QApplication(sys.argv)
+
     dll_path = os.path.join(BASE_DIR, MPV_DLL_NAME)
     if os.path.exists(dll_path):
         if verify_mpv_dll(dll_path):
@@ -64,10 +67,13 @@ def check_and_download_mpv():
             f"Existing {MPV_DLL_NAME} failed SHA256 verification.\n"
             "It will be removed, and a clean copy will be downloaded.",
         )
-        os.remove(dll_path)
-
-    if QApplication.instance() is None:
-        QApplication(sys.argv)
+        try:
+            os.remove(dll_path)
+        except OSError:
+            # The download below replaces this path atomically via os.replace(),
+            # so a failed removal here (e.g. file locked by another running
+            # instance or antivirus scan) doesn't need to be fatal.
+            pass
 
     msg = QMessageBox()
     msg.setIcon(QMessageBox.Icon.Information)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import codecs
+import math
 import os
 import re
 import tempfile
@@ -11,7 +12,9 @@ from constants import AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, MEDIA_EXTENSIONS, SUBT
 
 
 def format_time(seconds: float | int | None) -> str:
-    seconds = max(0, int(seconds or 0))
+    if not seconds or not math.isfinite(seconds):
+        seconds = 0
+    seconds = max(0, int(seconds))
     minutes, secs = divmod(seconds, 60)
     hours, minutes = divmod(minutes, 60)
     return f"{hours:02d}:{minutes:02d}:{secs:02d}" if hours > 0 else f"{minutes:02d}:{secs:02d}"

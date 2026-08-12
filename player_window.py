@@ -34,16 +34,24 @@ from PySide6.QtWidgets import (
 from constants import (
     APP_DISPLAY_NAME,
     APP_NAME,
+    AUDIO_EXTENSIONS,
     DEFAULT_VOLUME,
     ORG_NAME,
     RECENT_FILES_LIMIT,
     RESUME_THRESHOLD_SECONDS,
+    VIDEO_EXTENSIONS,
 )
 from file_association import register_file_associations
 from mpv_setup import IS_LINUX, IS_MAC, IS_WINDOWS
 from utils import convert_smi_file_to_temp_srt, convert_subtitle_to_utf8, find_adjacent_media_in_folder, find_matching_image, find_matching_subtitle, find_next_media_in_folder, find_previous_media_in_folder, format_time, is_supported_audio, is_supported_media, is_supported_subtitle, normalize_recent_files
 
 mpv = cast(Any, importlib.import_module("mpv"))
+
+# Built from constants.py so adding a new extension there automatically shows
+# up in the "Open File..." dialog filters instead of only being reachable via
+# drag-and-drop / "All Files".
+_VIDEO_FILTER_PATTERNS = " ".join(f"*{ext}" for ext in sorted(VIDEO_EXTENSIONS))
+_AUDIO_FILTER_PATTERNS = " ".join(f"*{ext}" for ext in sorted(AUDIO_EXTENSIONS))
 
 
 def _gl_get_proc_address(_ctx, name):
@@ -887,10 +895,9 @@ class VideoPlayer(QMainWindow):
             self,
             "Select Media File",
             "",
-            "Media Files (*.mp4 *.mkv *.avi *.mov *.wmv *.flv *.webm *.3gp *.mpeg *.mpg *.ts *.tp *.asf *.m4v "
-            "*.wav *.mp3 *.flac *.aac *.ogg *.m4a *.opus *.wma *.aiff *.aif *.ape *.alac);;"
-            "Video Files (*.mp4 *.mkv *.avi *.mov *.wmv *.flv *.webm *.3gp *.mpeg *.mpg *.ts *.tp *.asf *.m4v);;"
-            "Audio Files (*.wav *.mp3 *.flac *.aac *.ogg *.m4a *.opus *.wma *.aiff *.aif *.ape *.alac);;"
+            f"Media Files ({_VIDEO_FILTER_PATTERNS} {_AUDIO_FILTER_PATTERNS});;"
+            f"Video Files ({_VIDEO_FILTER_PATTERNS});;"
+            f"Audio Files ({_AUDIO_FILTER_PATTERNS});;"
             "All Files (*)",
         )
         if file_path:
@@ -920,6 +927,7 @@ class VideoPlayer(QMainWindow):
             
             old_paths = list(self.converted_subtitle_paths)
             self.converted_subtitle_paths = []
+            self._manual_subtitle_temp_path = None
             self.current_media_path = os.path.abspath(path)
             self.media_ended = False
             self._eof_armed = False
@@ -1042,13 +1050,29 @@ class VideoPlayer(QMainWindow):
         try:
             self.player.sub_add(prepared_path, flags="select")
         except Exception as e:
+            if prepared_path != path:
+                self._cleanup_paths([prepared_path])
+                if prepared_path in self.converted_subtitle_paths:
+                    self.converted_subtitle_paths.remove(prepared_path)
             _ = QMessageBox.critical(
                 self,
                 "Subtitle Error",
                 f"Failed to load the subtitle into the player.\n\nDetails: {e}",
             )
             return
-        self._audio_subtitle_on = True
+
+        # Loading several candidate subtitles in a row (without reloading the
+        # video in between) would otherwise leak one converted temp file per
+        # attempt, since only load_video()'s old_paths sweep normally drains
+        # converted_subtitle_paths.
+        previous = getattr(self, "_manual_subtitle_temp_path", None)
+        if previous and previous != prepared_path:
+            self._cleanup_paths([previous])
+            if previous in self.converted_subtitle_paths:
+                self.converted_subtitle_paths.remove(previous)
+        self._manual_subtitle_temp_path = prepared_path if prepared_path != path else None
+
+        self._audio_subtitle_on = is_supported_audio(self.current_media_path)
         self.audio_sub_label.setText("")
         self.audio_sub_label.setVisible(False)
 
@@ -1314,6 +1338,13 @@ class VideoPlayer(QMainWindow):
             super().keyPressEvent(event)
 
     def closeEvent(self, event):
+        # export_process.waitForFinished() below can pump the event loop, so a
+        # second close request (Escape, the close button again, etc.) arriving
+        # while the first closeEvent() is still on the stack must not re-enter
+        # this teardown.
+        if getattr(self, "_closing", False):
+            return
+        self._closing = True
         if hasattr(self, "timer"):
             self.timer.stop()
         if hasattr(self, "mouse_timer"):

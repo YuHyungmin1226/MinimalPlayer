@@ -26,6 +26,17 @@ class UtilsTest(unittest.TestCase):
         self.assertEqual(format_time(65), "01:05")
         self.assertEqual(format_time(3661), "01:01:01")
 
+    def test_format_time_handles_none_and_negative(self):
+        self.assertEqual(format_time(None), "00:00")
+        self.assertEqual(format_time(-5), "00:00")
+
+    def test_format_time_handles_nan_and_infinity(self):
+        # mpv's time_pos/duration can transiently report these while
+        # buffering or seeking; format_time must not raise for them.
+        self.assertEqual(format_time(float("nan")), "00:00")
+        self.assertEqual(format_time(float("inf")), "00:00")
+        self.assertEqual(format_time(float("-inf")), "00:00")
+
     def test_is_supported_video_is_case_insensitive(self):
         self.assertTrue(is_supported_video("movie.MP4"))
         self.assertFalse(is_supported_video("notes.txt"))
